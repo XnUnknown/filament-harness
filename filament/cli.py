@@ -31,7 +31,7 @@ def main() -> int:
     run.add_argument("tasks_file", nargs="?", help="JSON file with tasks")
     run.add_argument("--config", help="path to TOML config")
     run.add_argument("--target", help="override target file")
-    run.add_argument("--client", choices=["auto", "mock", "ollama"])
+    run.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"])
     run.add_argument("--model", help="override LLM model")
     run.add_argument("--max-tokens", type=int, help="context token budget")
     run.add_argument("--workers", type=int, help="parallel agent count")

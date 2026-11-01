@@ -4,10 +4,33 @@ from pathlib import Path
 
 from filament.config import HarnessConfig, load_config
 from filament.files import ensure_target_within_root, extract_code
+from filament.llm import build_client
 from filament.review import parse_fixes
 from filament.context import ContextBudget
 from filament.tasks import flatten_tasks, parse_tasks, task_instruction
 from filament.tools import Toolset
+
+
+class TestProviders(unittest.TestCase):
+    def test_build_clients(self):
+        from filament.config import LLMConfig
+
+        self.assertEqual(type(build_client(LLMConfig(kind="mock"))).__name__, "MockLLM")
+        self.assertEqual(type(build_client(LLMConfig(kind="ollama"))).__name__, "OllamaClient")
+        self.assertEqual(
+            type(build_client(LLMConfig(kind="openai", base_url="http://localhost:1234/v1"))).__name__,
+            "OpenAICompatibleClient",
+        )
+        self.assertEqual(
+            type(build_client(LLMConfig(kind="anthropic", api_key="x"))).__name__,
+            "AnthropicClient",
+        )
+
+    def test_cloud_requires_key(self):
+        from filament.config import LLMConfig
+
+        with self.assertRaises(ValueError):
+            LLMConfig(kind="openai", base_url="https://api.openai.com/v1").validate()
 
 
 class TestReview(unittest.TestCase):

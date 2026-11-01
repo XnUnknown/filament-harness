@@ -8,7 +8,7 @@ from .agent import CodingAgent
 from .config import HarnessConfig, load_config
 from .context import ContextBudget
 from .files import append_code, ensure_target_within_root, extract_code, replace_line
-from .llm import make_client
+from .llm import build_client
 from .review import review_file
 from .tasks import TaskSpec, flatten_tasks, parse_tasks, task_instruction
 from .tools import Toolset
@@ -39,7 +39,7 @@ class Orchestrator:
             max_tokens=config.effective_max_tokens,
             chars_per_token=config.chars_per_token,
         )
-        self.client = make_client(config.llm.kind)
+        self.client = build_client(config.llm)
         self.tools = Toolset(
             client=self.client,
             budget=self.budget,

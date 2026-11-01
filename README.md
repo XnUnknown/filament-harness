@@ -41,6 +41,17 @@ Example task file:
 - Writes: append batch after all agents finish; fixes apply by exact line number.
 - Security: target paths must stay inside the working root unless explicitly allowed.
 
+## Providers
+
+Filament supports:
+
+- `mock` for offline tests
+- `ollama` for local Ollama
+- `openai` for OpenAI and OpenAI-compatible endpoints (Groq, Together, vLLM, LM Studio, etc.)
+- `anthropic` for Anthropic Messages API
+
+Use `--client openai --model ...` with `FILAMENT_API_KEY`, or configure `[llm]` in TOML.
+
 ## Configuration
 
 Copy `filament.toml.example` to `filament.toml` or pass `--config`.

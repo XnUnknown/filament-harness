@@ -10,18 +10,27 @@ from typing import Any
 
 @dataclass
 class LLMConfig:
-    kind: str = "auto"  # auto, mock, ollama
+    kind: str = "auto"  # auto, mock, ollama, openai, anthropic
     model: str = "llama3.2"
-    base_url: str = "http://localhost:11434"
+    base_url: str | None = None
+    api_key: str | None = None
+    timeout: int = 120
     use_ollama_env: bool = False
 
     def validate(self) -> None:
-        if self.kind not in {"auto", "mock", "ollama"}:
+        if self.kind not in {"auto", "mock", "ollama", "openai", "anthropic"}:
             raise ValueError(f"unknown llm kind: {self.kind}")
         if not self.model.strip():
             raise ValueError("llm model must not be empty")
-        if not self.base_url.startswith(("http://", "https://")):
+        if self.base_url and not self.base_url.startswith(("http://", "https://")):
             raise ValueError("llm base_url must be http(s)")
+        if self.timeout < 1:
+            raise ValueError("llm timeout must be positive")
+        if self.kind in {"openai", "anthropic"}:
+            key = self.api_key or os.environ.get("FILAMENT_API_KEY")
+            # Local OpenAI-compatible servers may omit keys; require for hosted endpoints.
+            if not key and self.base_url and "localhost" not in self.base_url and "127.0.0.1" not in self.base_url:
+                raise ValueError(f"api_key is required for {self.kind} provider")
 
 
 @dataclass
@@ -109,7 +118,9 @@ def load_config(path: str | Path | None = None) -> HarnessConfig:
         "FILAMENT_TIMEOUT_SHELL": ("timeout_shell", int),
         "FILAMENT_MODEL": ("llm.model", str),
         "FILAMENT_OLLAMA_URL": ("llm.base_url", str),
+        "FILAMENT_API_KEY": ("llm.api_key", str),
         "FILAMENT_CLIENT": ("llm.kind", str),
+        "FILAMENT_TIMEOUT": ("llm.timeout", int),
     }
     for env_name, (field_path, cast) in env_map.items():
         value = os.environ.get(env_name)
