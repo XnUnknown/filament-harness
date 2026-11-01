@@ -114,6 +114,7 @@ class TUIApp:
             print(f"Tasks: {len(self.tasks)} | Target: {self.target} | CWD: {self.shell_cwd}")
             print(_line())
             print("1. Run tasks")
+            print("c. Chat with orchestrator")
             print("2. Manage tasks")
             print("3. Provider settings")
             print("4. Context and budget settings")
@@ -127,6 +128,8 @@ class TUIApp:
             choice = _prompt("Select", "1")
             if choice == "1":
                 self.run_tasks()
+            elif choice.lower() in {"c", "chat"}:
+                self.chat_mode()
             elif choice == "2":
                 self.manage_tasks()
             elif choice == "3":
@@ -269,6 +272,47 @@ class TUIApp:
         max_fixes = _prompt("Max fixes (blank for all)", "" if self.max_fixes is None else str(self.max_fixes))
         self.max_fixes = int(max_fixes) if max_fixes.strip() else None
         _prompt("Press Enter to continue", "")
+
+    def chat_mode(self) -> None:
+        from filament.chat import ChatOrchestrator
+
+        chat = ChatOrchestrator(self.config, self.shell_cwd)
+        print("Chat with main orchestrator")
+        print(_line())
+        print("Type your request, or 'exit' to return.")
+        while True:
+            request = _prompt("You")
+            if not request or request.lower() in {"exit", "quit", "q"}:
+                return
+            try:
+                summary, tasks = chat.plan(request)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Planning failed: {exc}")
+                continue
+            print(f"Orchestrator: {summary}")
+            print("Planned tasks:")
+            for task in tasks:
+                print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
+            if not _prompt_bool("Run this plan now?", True):
+                continue
+            try:
+                result = chat.run_plan(tasks, review=self.review, fix=self.fix, max_fixes=self.max_fixes)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Run failed: {exc}")
+                continue
+            print(_line())
+            for key, value in result.items():
+                if key == "errors":
+                    print(f"errors: {len(value)}")
+                    for item in value:
+                        print(f"  - {item}")
+                elif key != "plan_summary":
+                    print(f"{key}: {value}")
+            target = Path(result.get("target_file", "output.py"))
+            if target.exists() and target.stat().st_size <= 20000:
+                print(_line())
+                print(target.read_text(encoding="utf-8", errors="replace"))
+            _prompt("Press Enter to continue", "")
 
     def run_tasks(self) -> None:
         _clear()

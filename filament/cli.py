@@ -44,6 +44,9 @@ def main() -> int:
     run.add_argument("--report", help="write JSON report to this path")
     run.add_argument("--quiet", action="store_true", help="suppress progress")
 
+    chat = sub.add_parser("chat", help="talk to the main orchestrator")
+    chat.add_argument("--config", default="filament.toml", help="config path")
+
     tui = sub.add_parser("tui", help="interactive terminal UI")
     tui.add_argument("--config", default="filament.toml", help="config path")
 
@@ -51,6 +54,34 @@ def main() -> int:
 
     if args.cmd == "tui":
         run_tui(args.config)
+        return 0
+    if args.cmd == "chat":
+        from filament.chat import ChatOrchestrator
+
+        cfg = load_config(args.config)
+        chat_orchestrator = ChatOrchestrator(cfg, ".")
+        print("Filament chat. Type 'exit' to quit.")
+        while True:
+            try:
+                request = input("You: ").strip()
+            except EOFError:
+                return 0
+            if not request or request.lower() in {"exit", "quit"}:
+                return 0
+            try:
+                summary, tasks = chat_orchestrator.plan(request)
+                print("Orchestrator:", summary)
+                print("Plan:")
+                for task in tasks:
+                    print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
+                answer = input("Run? [Y/n] ").strip().lower()
+                if answer in {"n", "no"}:
+                    continue
+                result = chat_orchestrator.run_plan(tasks)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Error: {exc}")
+                continue
+            print(json.dumps({k: v for k, v in result.items() if k != "plan_summary"}, indent=2))
         return 0
     if args.cmd != "run":
         return 2
