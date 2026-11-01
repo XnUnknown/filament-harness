@@ -1,0 +1,15 @@
+{
+  "tasks": [
+    "Write a Python function named add(a, b) that returns a + b.",
+    {
+      "id": "math",
+      "task": "Implement focused math helpers",
+      "subtasks": [
+        "Write a Python function named mul(a, b) that returns a * b.",
+        "Write a Python function named sub(a, b) that returns a - b."
+      ],
+      "target": "examples/math.py"
+    }
+  ],
+  "target": "examples/generated.py"
+}

@@ -1,0 +1,16 @@
+max_tokens = 120000
+chars_per_token = 4
+budget_margin = 0.05
+workers = 4
+max_tasks = 32
+timeout_shell = 60
+max_shell_output = 20000
+allow_outside_target = false
+atomic_writes = true
+use_shell = true
+command_allowlist = []
+
+[llm]
+kind = "auto"
+model = "llama3.2"
+base_url = "http://localhost:11434"

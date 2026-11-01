@@ -298,6 +298,22 @@ Acceptance criteria:
 - Line-based fixes can be fragile on large files.
 - The harness is not intended for large refactors or security audits.
 
+## 12.5 Version 0.2 Enhancements
+
+The implementation was expanded beyond the initial scaffold:
+
+- Configuration system: `filament/config.py`, TOML/env/CLI overrides, validation, safety margin.
+- Task model: `filament/tasks.py` supports nested subtasks, IDs, targets, enablement, and flattening.
+- Per-task target files and inheritance of parent targets.
+- Security and robustness: bounded shell timeout/output, optional command allowlist, path containment, atomic line replacement, fsync append.
+- Context improvements: configurable chars/token, remaining budget checks, overflow markers.
+- Review parser: tolerant `FIX`/`Fix line` parser with deduplication.
+- CLI: config, override, report output, quiet mode, exit codes.
+- Tests: config, tasks, files, review, context, shell, integration.
+- Packaging/docs: version 0.2.0, typed marker, config example, README, subtask example.
+
+Generated artifacts (code files) are intentionally excluded from version control.
+
 ## 13. Future Improvements
 
 - Optional exact tokenizer integration.
