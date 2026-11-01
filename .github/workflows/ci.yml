@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           rm -f output.py
-          filament run examples/demo_tasks.json --client mock --quiet
+          filament run examples/demo_tasks.json --client mock --quiet --target output.py
           test -f output.py
           rm -f output.py
 
