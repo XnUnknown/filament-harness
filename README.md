@@ -52,6 +52,19 @@ Filament supports:
 
 Use `--client openai --model ...` with `FILAMENT_API_KEY`, or configure `[llm]` in TOML.
 
+## TUI
+
+Start the interactive terminal UI:
+
+```bash
+filament tui
+# or
+filament-tui
+```
+
+The TUI supports provider/settings/context/execution/path/run configuration, task
+management, config save/load, and running the harness with live result output.
+
 ## Configuration
 
 Copy `filament.toml.example` to `filament.toml` or pass `--config`.

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import load_config
 from .orchestrator import Orchestrator
+from .tui import run_tui
 
 
 def _load_tasks(path: Path) -> tuple[list, str]:
@@ -43,8 +44,14 @@ def main() -> int:
     run.add_argument("--report", help="write JSON report to this path")
     run.add_argument("--quiet", action="store_true", help="suppress progress")
 
+    tui = sub.add_parser("tui", help="interactive terminal UI")
+    tui.add_argument("--config", default="filament.toml", help="config path")
+
     args = parser.parse_args()
 
+    if args.cmd == "tui":
+        run_tui(args.config)
+        return 0
     if args.cmd != "run":
         return 2
 
