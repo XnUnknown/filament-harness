@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from filament.config import HarnessConfig
 from filament.orchestrator import Orchestrator
 
 
@@ -11,7 +12,7 @@ class TestHarness(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             target = "out.py"
             target_path = Path(d) / target
-            orch = Orchestrator(client_kind="mock", shell_cwd=d)
+            orch = Orchestrator(client_kind="mock", config=HarnessConfig(), shell_cwd=d)
             tasks = [
                 "Write a Python function named add(a, b) that returns a + b.",
                 "Write a Python function named mul(a, b) that returns a * b.",

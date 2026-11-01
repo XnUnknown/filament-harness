@@ -28,9 +28,15 @@ class TestProviders(unittest.TestCase):
 
     def test_cloud_requires_key(self):
         from filament.config import LLMConfig
+        import os
 
-        with self.assertRaises(ValueError):
-            LLMConfig(kind="openai", base_url="https://api.openai.com/v1").validate()
+        old = os.environ.pop("FILAMENT_API_KEY", None)
+        try:
+            with self.assertRaises(ValueError):
+                LLMConfig(kind="openai", base_url="https://api.openai.com/v1").validate()
+        finally:
+            if old is not None:
+                os.environ["FILAMENT_API_KEY"] = old
 
 
 class TestReview(unittest.TestCase):

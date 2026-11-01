@@ -94,6 +94,23 @@ def _from_dict(data: dict[str, Any]) -> HarnessConfig:
 
 
 def load_config(path: str | Path | None = None) -> HarnessConfig:
+    # Support a simple project-local .env file without adding dependencies.
+    if path is None:
+        dotenv_candidates = [Path(".env")]
+    else:
+        dotenv_candidates = [Path(path).parent / ".env"]
+    for env_path in dotenv_candidates:
+        if env_path.exists():
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key:
+                    os.environ.setdefault(key, value)
+
     search_paths: list[Path] = []
     if path is not None:
         search_paths.append(Path(path))

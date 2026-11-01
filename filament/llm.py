@@ -34,19 +34,23 @@ class MockLLM:
 
 
 class OllamaClient:
-    def __init__(self, model: str, base_url: str, timeout: int = 120):
+    def __init__(self, model: str, base_url: str, timeout: int = 120, api_key: str | None = None):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.api_key = api_key
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         payload = {"model": self.model, "prompt": prompt, "stream": False}
         if system:
             payload["system"] = system
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         req = urllib.request.Request(
             f"{self.base_url}/api/generate",
             data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
@@ -168,7 +172,7 @@ def build_client(llm_config: Any) -> LLMClient:
         return MockLLM()
     if kind == "ollama":
         url = base_url or os.environ.get("FILAMENT_OLLAMA_URL") or "http://localhost:11434"
-        return OllamaClient(model=model, base_url=url, timeout=timeout)
+        return OllamaClient(model=model, base_url=url, timeout=timeout, api_key=api_key)
     if kind == "openai":
         url = base_url or "https://api.openai.com/v1"
         if not api_key and not _is_local_url(url):
