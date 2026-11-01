@@ -1,0 +1,7 @@
+{
+  "tasks": [
+    "Write a Python function named add(a, b) that returns a + b.",
+    "Write a Python function named mul(a, b) that returns a * b."
+  ],
+  "target": "examples/generated.py"
+}
