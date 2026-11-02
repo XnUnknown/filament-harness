@@ -323,7 +323,7 @@ class TUIApp:
                     print(target.read_text(encoding="utf-8", errors="replace"))
                 print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
                 # Autonomous review/follow-up loop: continue until orchestrator says done or no more plan.
-                for _ in range(2):
+                for _ in range(5):
                     follow_up = chat.reflect(result)
                     if not follow_up:
                         break
