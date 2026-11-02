@@ -107,7 +107,7 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     omitted = len(text) - limit
-    marker = f"\\n... [truncated {omitted} chars] ...\\n"
+    marker = f"\n... [truncated {omitted} chars] ...\n"
     if limit <= len(marker):
         return text[-limit:]
     head_budget = (limit - len(marker)) // 2

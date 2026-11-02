@@ -60,5 +60,14 @@ class TestEdgeCases(unittest.TestCase):
                 tools.run_shell("printf nope")
 
 
+    def test_toolbox_rejects_null_byte_path(self):
+        from filament.agent_tools import Toolbox
+
+        with tempfile.TemporaryDirectory() as d:
+            tools = Toolbox(d, HarnessConfig())
+            with self.assertRaises(ValueError):
+                tools._safe("evil" + chr(0) + ".py")
+
+
 if __name__ == "__main__":
     unittest.main()

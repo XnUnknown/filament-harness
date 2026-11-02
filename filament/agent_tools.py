@@ -14,7 +14,7 @@ class Toolbox:
         self.config = config
 
     def _safe(self, path: str | Path) -> Path:
-        if "\\x00" in str(path):
+        if "\x00" in str(path):
             raise ValueError("path contains a null byte")
         candidate = Path(path).expanduser()
         if not candidate.is_absolute():
@@ -127,19 +127,6 @@ class Toolbox:
         if tool == "check_python":
             return self.check_python(args.get("path", ""))
         raise ValueError(f"unknown tool: {tool}")
-
-def _truncate(text: str, limit: int) -> str:
-    if limit < 1:
-        raise ValueError("limit must be positive")
-    if len(text) <= limit:
-        return text
-    omitted = len(text) - limit
-    marker = chr(10) + "... [truncated " + str(omitted) + " chars] ..." + chr(10)
-    if limit <= len(marker):
-        return text[-limit:]
-    head_budget = (limit - len(marker)) // 2
-    tail_budget = limit - len(marker) - head_budget
-    return text[:head_budget] + marker + text[-tail_budget:]
 
 def _truncate(text: str, limit: int) -> str:
     if limit < 1:
