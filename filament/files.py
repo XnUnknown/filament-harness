@@ -11,7 +11,7 @@ def extract_code(text: str) -> str:
     """Pull the first fenced code block; fall back to raw text."""
     if not isinstance(text, str):
         raise TypeError("text must be a string")
-    matches = list(re.finditer(r"```(?:[A-Za-z0-9_+-]+)?\n(.*?)```", text, re.DOTALL))
+    matches = list(re.finditer(r"```(?:[A-Za-z0-9_+-]+)?\r?\n(.*?)```", text, re.DOTALL))
     if matches:
         code = matches[0].group(1).rstrip()
     else:

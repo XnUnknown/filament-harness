@@ -90,10 +90,12 @@ class Toolset:
         if len(task) > 50_000:
             raise ValueError("task is too long")
         prompt = task
-        reserve = max(512, self.config.max_tokens // 20)
-        if self.budget.total_tokens() + self.budget.estimate(prompt) + reserve > self.config.max_tokens:
+        reserve = max(512, self.budget.max_tokens // 20)
+        if self.budget.total_tokens() + self.budget.estimate(prompt) + reserve > self.budget.max_tokens:
             raise RuntimeError("context budget exceeded before spawn")
-        self.budget.add(f"spawn:{prompt}")
+        added_prompt = self.budget.add(f"spawn:{prompt}")
+        if not added_prompt:
+            raise RuntimeError("context budget exceeded before spawn")
         result = self.client.generate(prompt, system=system or CODING_SYSTEM)
         self.budget.add(f"result:{result}")
         return result

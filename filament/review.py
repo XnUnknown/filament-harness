@@ -30,7 +30,7 @@ def parse_fixes(text: str) -> list[tuple[int, str]]:
 def review_file(client: LLMClient, path: str | Path, budget: ContextBudget) -> list[tuple[int, str]]:
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     # Keep review input light: cap to remaining budget with a sensible floor.
-    remaining_chars = max(2000, budget.remaining_tokens() * 4)
+    remaining_chars = max(2000, budget.remaining_tokens() * budget.chars_per_token)
     if len(text) > remaining_chars:
         text = text[-remaining_chars:]
     prompt = f"Review this file and list fixes:\n```\n{text}\n```"
