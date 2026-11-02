@@ -56,7 +56,7 @@ class OllamaClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode())
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise RuntimeError(f"ollama request failed: {exc}") from exc
         return data.get("response", "")
 
@@ -91,7 +91,7 @@ class OpenAICompatibleClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             raise RuntimeError(f"openai-compatible request failed: HTTP {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise RuntimeError(f"openai-compatible request failed: {exc}") from exc
 
         choices = data.get("choices") or []
@@ -139,7 +139,7 @@ class AnthropicClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             raise RuntimeError(f"anthropic request failed: HTTP {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise RuntimeError(f"anthropic request failed: {exc}") from exc
 
         content = data.get("content") or []

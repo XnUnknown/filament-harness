@@ -52,6 +52,8 @@ def flatten_tasks(tasks: list[TaskSpec]) -> list[TaskSpec]:
     result: list[TaskSpec] = []
 
     def visit(task: TaskSpec) -> None:
+        if not task.enabled:
+            return
         if task.subtasks:
             for child in task.subtasks:
                 visit(child)

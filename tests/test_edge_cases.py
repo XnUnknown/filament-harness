@@ -30,5 +30,23 @@ class TestEdgeCases(unittest.TestCase):
             replace_line(path, 1, "new")
             self.assertEqual(path.read_text(encoding="utf-8"), "new")
 
+    def test_flatten_skips_disabled_subtasks(self):
+        from filament.tasks import flatten_tasks, parse_tasks
+
+        tasks = parse_tasks(
+            [
+                {
+                    "id": "parent",
+                    "task": "parent work",
+                    "subtasks": [
+                        {"id": "on", "task": "enabled", "enabled": True},
+                        {"id": "off", "task": "disabled", "enabled": False},
+                    ],
+                }
+            ]
+        )
+        self.assertEqual([task.id for task in flatten_tasks(tasks)], ["on"])
+
+
 if __name__ == "__main__":
     unittest.main()
