@@ -102,9 +102,17 @@ class Toolset:
 
 
 def _truncate(text: str, limit: int) -> str:
+    if limit < 1:
+        raise ValueError("limit must be positive")
     if len(text) <= limit:
         return text
-    return text[:limit] + f"\n... [truncated {len(text) - limit} chars]"
+    omitted = len(text) - limit
+    marker = f"\\n... [truncated {omitted} chars] ...\\n"
+    if limit <= len(marker):
+        return text[-limit:]
+    head_budget = (limit - len(marker)) // 2
+    tail_budget = limit - len(marker) - head_budget
+    return text[:head_budget] + marker + text[-tail_budget:]
 
 
 

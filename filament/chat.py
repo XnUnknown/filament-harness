@@ -80,7 +80,7 @@ def is_small_talk(request: str) -> bool:
     cleaned = request.strip().lower().rstrip("!.? ")
     if cleaned in _SMALL_TALK:
         return True
-    code_words = {"build", "create", "write", "fix", "test", "run", "read", "analyze", "refactor", "debug", "implement"}
+    code_words = {"build", "create", "write", "fix", "test", "run", "read", "analyze", "refactor", "debug", "implement", "verify", "check", "review", "inspect", "validate"}
     words = set(cleaned.split())
     if len(words) <= 4 and not (words & code_words):
         return True

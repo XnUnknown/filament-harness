@@ -14,6 +14,8 @@ class Toolbox:
         self.config = config
 
     def _safe(self, path: str | Path) -> Path:
+        if "\\x00" in str(path):
+            raise ValueError("path contains a null byte")
         candidate = Path(path).expanduser()
         if not candidate.is_absolute():
             candidate = self.root / candidate
@@ -59,23 +61,48 @@ class Toolbox:
     def run_shell(self, command: str, timeout: int | None = None) -> str:
         if not command or not command.strip():
             raise ValueError("command must not be empty")
+        if len(command) > 20_000:
+            raise ValueError("command is too long")
+        if self.config.command_allowlist:
+            stripped = command.lstrip()
+            if not any(stripped.startswith(prefix) for prefix in self.config.command_allowlist):
+                raise ValueError("command is not on the configured allowlist")
+
         timeout = timeout or self.config.timeout_shell
+        use_shell = self.config.use_shell
         try:
-            completed = subprocess.run(
-                command,
-                shell=True,
-                cwd=str(self.root),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            if use_shell:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=str(self.root),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    errors="replace",
+                )
+            else:
+                import shlex
+                completed = subprocess.run(
+                    shlex.split(command),
+                    shell=False,
+                    cwd=str(self.root),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    errors="replace",
+                )
             output = (completed.stdout or "") + (completed.stderr or "")
             if len(output) > self.config.max_shell_output:
-                output = output[: self.config.max_shell_output] + "\n... [truncated]"
-            return f"exit_code: {completed.returncode}\n{output}"
+                output = _truncate(output, self.config.max_shell_output)
+            return "exit_code: " + str(completed.returncode) + chr(10) + output
         except subprocess.TimeoutExpired as exc:
             partial = (exc.stdout or "") + (exc.stderr or "")
-            return f"exit_code: timeout\n{partial[: self.config.max_shell_output]}"
+            if len(partial) > self.config.max_shell_output:
+                partial = _truncate(partial, self.config.max_shell_output)
+            return "exit_code: timeout" + chr(10) + partial
+        except (OSError, ValueError) as exc:
+            return "exit_code: error" + chr(10) + str(exc)
 
     def check_python(self, path: str | Path) -> str:
         target = self._safe(path)
@@ -100,3 +127,29 @@ class Toolbox:
         if tool == "check_python":
             return self.check_python(args.get("path", ""))
         raise ValueError(f"unknown tool: {tool}")
+
+def _truncate(text: str, limit: int) -> str:
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    marker = chr(10) + "... [truncated " + str(omitted) + " chars] ..." + chr(10)
+    if limit <= len(marker):
+        return text[-limit:]
+    head_budget = (limit - len(marker)) // 2
+    tail_budget = limit - len(marker) - head_budget
+    return text[:head_budget] + marker + text[-tail_budget:]
+
+def _truncate(text: str, limit: int) -> str:
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    marker = chr(10) + "... [truncated " + str(omitted) + " chars] ..." + chr(10)
+    if limit <= len(marker):
+        return text[-limit:]
+    head_budget = (limit - len(marker)) // 2
+    tail_budget = limit - len(marker) - head_budget
+    return text[:head_budget] + marker + text[-tail_budget:]

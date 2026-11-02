@@ -11,8 +11,8 @@ from filament.tools import Toolset
 
 class TestEdgeCases(unittest.TestCase):
     def test_extract_code_handles_crlf_fence(self):
-        text = "```python\r\nprint(1)\r\n```\r\n"
-        self.assertEqual(extract_code(text), "print(1)\n")
+        text = "\r\nprint(1)\n\r\n".replace(chr(92) + "r", chr(13))
+        self.assertEqual(extract_code(text), "print(1)" + chr(10))
 
     def test_spawn_agent_refuses_when_budget_full(self):
         cfg = HarnessConfig(max_tokens=1024)
@@ -46,6 +46,18 @@ class TestEdgeCases(unittest.TestCase):
             ]
         )
         self.assertEqual([task.id for task in flatten_tasks(tasks)], ["on"])
+
+    def test_toolbox_run_shell_honors_allowlist(self):
+        from filament.agent_tools import Toolbox
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = HarnessConfig(use_shell=False, command_allowlist=["echo"])
+            tools = Toolbox(d, cfg)
+            result = tools.run_shell("echo hello")
+            self.assertIn("exit_code: 0", result)
+            self.assertIn("hello", result)
+            with self.assertRaises(ValueError):
+                tools.run_shell("printf nope")
 
 
 if __name__ == "__main__":
