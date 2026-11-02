@@ -279,7 +279,8 @@ class TUIApp:
         chat = ChatOrchestrator(self.config, self.shell_cwd, mode=self._chat_mode_name())
         print("Chat with main orchestrator")
         print(_line())
-        print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
+        print(f"Session: {chat.session.session_id} | Mode: {chat.mode} | Provider: {self.config.llm.kind} | Model: {self.config.llm.model}")
+        print("If provider shows mock, run this TUI from the project directory containing .env, or pass --config.")
         print("Commands: /mode auto|plan|review|accept, /sessions, /load <id>, /compress, /config, exit")
         print("Type your request, or 'exit' to return.")
         while True:

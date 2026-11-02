@@ -17,6 +17,8 @@ class MockLLM:
     """Deterministic client for tests/offline runs."""
 
     def generate(self, prompt: str, system: str | None = None) -> str:
+        if system and "helpful coding assistant" in system.lower():
+            return "Hello! I am Filament. Ask me to plan, generate, or fix code."
         import re
 
         m = re.search(r"named\s+(\w+)\s*\(([^)]*)\)", prompt)
