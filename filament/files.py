@@ -23,6 +23,8 @@ def extract_code(text: str) -> str:
 
 
 def append_code(path: str | Path, code: str) -> None:
+    if "\x00" in str(path):
+        raise ValueError("path contains a null byte")
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     normalized = code if code.endswith("\n") else code + "\n"
@@ -34,6 +36,8 @@ def append_code(path: str | Path, code: str) -> None:
 
 def replace_line(path: str | Path, line_no: int, new_text: str) -> None:
     """Replace an existing 1-indexed line with new_text atomically."""
+    if "\x00" in str(path):
+        raise ValueError("path contains a null byte")
     p = Path(path)
     raw = p.read_text(encoding="utf-8")
     lines = raw.splitlines(keepends=True)
@@ -64,6 +68,8 @@ def replace_line(path: str | Path, line_no: int, new_text: str) -> None:
 
 
 def ensure_target_within_root(target: str | Path, root: str | Path, allow_outside: bool = False) -> Path:
+    if "\x00" in str(target) or "\x00" in str(root):
+        raise ValueError("path contains a null byte")
     target_path = Path(target).expanduser()
     if not target_path.is_absolute():
         target_path = Path(root).expanduser() / target_path

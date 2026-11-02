@@ -91,7 +91,7 @@ class Orchestrator:
             )
             plans.append((task, target_path))
 
-        worker_count = min(workers or self.config.workers, len(plans))
+        worker_count = min(max(1, workers or self.config.workers), len(plans))
         raw_results: list[str | None] = [None] * len(plans)
         errors: list[str] = []
 
@@ -146,7 +146,7 @@ class Orchestrator:
                 errors.append(f"review failed: {exc}")
                 fixes = []
             if fix:
-                limit = len(fixes) if max_fixes is None else min(len(fixes), max_fixes)
+                limit = len(fixes) if max_fixes is None else min(len(fixes), max(0, max_fixes))
                 for line_no, instruction in fixes[:limit]:
                     try:
                         line_count = len(main_target.read_text(encoding="utf-8").splitlines())

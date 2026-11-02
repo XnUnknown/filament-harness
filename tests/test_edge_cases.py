@@ -4,8 +4,8 @@ from pathlib import Path
 
 from filament.config import HarnessConfig
 from filament.context import ContextBudget
-from filament.files import extract_code
-from filament.llm import MockLLM
+from filament.files import extract_code, ensure_target_within_root
+from filament.llm import MockLLM, OllamaClient
 from filament.tools import Toolset
 
 
@@ -60,6 +60,12 @@ class TestEdgeCases(unittest.TestCase):
                 tools.run_shell("printf nope")
 
 
+    def test_ensure_target_rejects_null_byte(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            with self.assertRaises(ValueError):
+                ensure_target_within_root("safe" + chr(0) + ".py", root)
+
     def test_toolbox_rejects_null_byte_path(self):
         from filament.agent_tools import Toolbox
 
@@ -67,6 +73,14 @@ class TestEdgeCases(unittest.TestCase):
             tools = Toolbox(d, HarnessConfig())
             with self.assertRaises(ValueError):
                 tools._safe("evil" + chr(0) + ".py")
+
+    def test_ollama_client_failure_raises_runtimeerror(self):
+        from unittest.mock import patch
+
+        client = OllamaClient(model="m", base_url="http://127.0.0.1:11434")
+        with patch("filament.llm.urllib.request.urlopen", side_effect=ConnectionError("boom")):
+            with self.assertRaises(RuntimeError):
+                client.generate("hello")
 
 
 if __name__ == "__main__":

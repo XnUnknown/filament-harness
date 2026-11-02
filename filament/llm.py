@@ -59,9 +59,14 @@ class OllamaClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode())
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            raise RuntimeError(f"ollama request failed: HTTP {exc.code}: {body}") from exc
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise RuntimeError(f"ollama request failed: {exc}") from exc
-        return data.get("response", "")
+        if not isinstance(data, dict):
+            raise RuntimeError("ollama response was not a JSON object")
+        return str(data.get("response", ""))
 
 
 class OpenAICompatibleClient:
@@ -97,9 +102,11 @@ class OpenAICompatibleClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             raise RuntimeError(f"openai-compatible request failed: HTTP {exc.code}: {body}") from exc
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise RuntimeError(f"openai-compatible request failed: {exc}") from exc
 
+        if not isinstance(data, dict):
+            raise RuntimeError("openai-compatible response was not a JSON object")
         choices = data.get("choices") or []
         if not choices:
             raise RuntimeError("openai-compatible response contained no choices")
@@ -146,9 +153,11 @@ class AnthropicClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             raise RuntimeError(f"anthropic request failed: HTTP {exc.code}: {body}") from exc
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise RuntimeError(f"anthropic request failed: {exc}") from exc
 
+        if not isinstance(data, dict):
+            raise RuntimeError("anthropic response was not a JSON object")
         content = data.get("content") or []
         if isinstance(content, list):
             texts = [part.get("text", "") for part in content if isinstance(part, dict)]
@@ -157,7 +166,10 @@ class AnthropicClient:
 
 
 def _is_local_url(url: str | None) -> bool:
-    return bool(url and ("localhost" in url or "127.0.0.1" in url))
+    if not url:
+        return False
+    lowered = url.lower()
+    return "localhost" in lowered or "127.0.0.1" in lowered or "[::1]" in lowered or "::1" in lowered
 
 
 def build_client(llm_config: Any) -> LLMClient:

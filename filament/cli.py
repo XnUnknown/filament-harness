@@ -19,6 +19,10 @@ def _load_tasks(path: Path) -> tuple[list, str]:
         raise ValueError("tasks file must contain a list or an object")
     tasks = raw.get("tasks", [])
     target = raw.get("target", "output.py")
+    if tasks is None:
+        tasks = []
+    if not isinstance(tasks, list):
+        raise ValueError("tasks must be a list")
     if not isinstance(target, str) or not target.strip():
         raise ValueError("target must be a non-empty string")
     return tasks, target.strip()

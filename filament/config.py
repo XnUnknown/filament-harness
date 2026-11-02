@@ -32,7 +32,8 @@ class LLMConfig:
         if self.kind in {"openai", "anthropic"}:
             key = self.api_key or os.environ.get("FILAMENT_API_KEY")
             # Local OpenAI-compatible servers may omit keys; require for hosted endpoints.
-            if not key and self.base_url and "localhost" not in self.base_url and "127.0.0.1" not in self.base_url:
+            local = bool(self.base_url) and ("localhost" in self.base_url or "127.0.0.1" in self.base_url)
+            if not key and not local:
                 raise ValueError(f"api_key is required for {self.kind} provider")
 
 

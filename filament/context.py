@@ -29,6 +29,8 @@ class ContextBudget:
         if estimate > self.max_tokens:
             text = f"<context omitted: {estimate} tokens exceeds budget>"
             estimate = self.estimate(text)
+        if estimate > self.max_tokens:
+            return False
         while self._chunks and self.total_tokens() + estimate > self.max_tokens:
             self._chunks.pop(0)
         if self.total_tokens() + estimate > self.max_tokens:
