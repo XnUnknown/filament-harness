@@ -36,11 +36,12 @@ class MockLLM:
 
 
 class OllamaClient:
-    def __init__(self, model: str, base_url: str, timeout: int = 120, api_key: str | None = None):
+    def __init__(self, model: str, base_url: str, timeout: int = 120, api_key: str | None = None, reasoning_effort: str | None = None):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.api_key = api_key
+        self.reasoning_effort = reasoning_effort
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         payload = {"model": self.model, "prompt": prompt, "stream": False}
@@ -66,11 +67,12 @@ class OllamaClient:
 class OpenAICompatibleClient:
     """OpenAI-compatible chat completions endpoint."""
 
-    def __init__(self, model: str, base_url: str, api_key: str | None = None, timeout: int = 120):
+    def __init__(self, model: str, base_url: str, api_key: str | None = None, timeout: int = 120, reasoning_effort: str | None = None):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.reasoning_effort = reasoning_effort
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         messages = []
@@ -78,6 +80,8 @@ class OpenAICompatibleClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         payload = {"model": self.model, "messages": messages, "stream": False}
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -109,11 +113,12 @@ class OpenAICompatibleClient:
 class AnthropicClient:
     """Anthropic Messages API endpoint."""
 
-    def __init__(self, model: str, base_url: str, api_key: str | None = None, timeout: int = 120):
+    def __init__(self, model: str, base_url: str, api_key: str | None = None, timeout: int = 120, reasoning_effort: str | None = None):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.reasoning_effort = reasoning_effort
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         payload: dict[str, Any] = {
@@ -162,6 +167,7 @@ def build_client(llm_config: Any) -> LLMClient:
     base_url = getattr(llm_config, "base_url", None)
     api_key = getattr(llm_config, "api_key", None) or os.environ.get("FILAMENT_API_KEY")
     timeout = getattr(llm_config, "timeout", 120) or 120
+    reasoning_effort = getattr(llm_config, "reasoning_effort", None)
     use_ollama_env = bool(getattr(llm_config, "use_ollama_env", False))
 
     if kind == "auto":
@@ -174,17 +180,17 @@ def build_client(llm_config: Any) -> LLMClient:
         return MockLLM()
     if kind == "ollama":
         url = base_url or os.environ.get("FILAMENT_OLLAMA_URL") or "http://localhost:11434"
-        return OllamaClient(model=model, base_url=url, timeout=timeout, api_key=api_key)
+        return OllamaClient(model=model, base_url=url, timeout=timeout, api_key=api_key, reasoning_effort=reasoning_effort)
     if kind == "openai":
         url = base_url or "https://api.openai.com/v1"
         if not api_key and not _is_local_url(url):
             raise ValueError("api_key is required for openai provider")
-        return OpenAICompatibleClient(model=model, base_url=url, api_key=api_key, timeout=timeout)
+        return OpenAICompatibleClient(model=model, base_url=url, api_key=api_key, timeout=timeout, reasoning_effort=reasoning_effort)
     if kind == "anthropic":
         url = base_url or "https://api.anthropic.com"
         if not api_key and not _is_local_url(url):
             raise ValueError("api_key is required for anthropic provider")
-        return AnthropicClient(model=model, base_url=url, api_key=api_key, timeout=timeout)
+        return AnthropicClient(model=model, base_url=url, api_key=api_key, timeout=timeout, reasoning_effort=reasoning_effort)
     raise ValueError(f"unknown llm kind: {kind}")
 
 
@@ -194,6 +200,7 @@ def make_client(
     base_url: str | None = None,
     api_key: str | None = None,
     timeout: int = 120,
+    reasoning_effort: str | None = None,
 ) -> LLMClient:
     cfg = SimpleNamespace(
         kind=kind,
@@ -201,6 +208,7 @@ def make_client(
         base_url=base_url,
         api_key=api_key,
         timeout=timeout,
+        reasoning_effort=reasoning_effort,
         use_ollama_env=(os.environ.get("FILAMENT_USE_OLLAMA") == "1"),
     )
     return build_client(cfg)

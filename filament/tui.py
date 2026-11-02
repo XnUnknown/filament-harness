@@ -86,6 +86,8 @@ def _dump_config(path: Path, config: HarnessConfig) -> None:
         f'api_key = {repr(llm.api_key or "")}',
         f"timeout = {llm.timeout}",
     ]
+    if llm.reasoning_effort:
+        lines.insert(-1, f'reasoning_effort = "{llm.reasoning_effort}"')
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -209,6 +211,9 @@ class TUIApp:
         api_value = _prompt("API key (blank to keep/unset)", api_default)
         self.config.llm.api_key = api_value if api_value else None
         self.config.llm.timeout = _prompt_int("Timeout seconds", self.config.llm.timeout, 1)
+        effort_default = self.config.llm.reasoning_effort or "none"
+        effort = _prompt("Reasoning effort (none/low/medium/high)", effort_default)
+        self.config.llm.reasoning_effort = None if effort.lower() in {"", "none", "off", "null"} else effort.lower()
         try:
             self.config.validate()
             print("Settings validated.")
@@ -317,9 +322,36 @@ class TUIApp:
                     print(_line())
                     print(target.read_text(encoding="utf-8", errors="replace"))
                 print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
+                # Autonomous review/follow-up loop: continue until orchestrator says done or no more plan.
+                for _ in range(2):
+                    follow_up = chat.reflect(result)
+                    if not follow_up:
+                        break
+                    follow_summary, follow_tasks = follow_up
+                    print(f"Orchestrator follow-up: {follow_summary}")
+                    print("Planned tasks:")
+                    for task in follow_tasks:
+                        print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
+                    if chat.mode != "auto" and not _prompt_bool("Run follow-up plan?", True):
+                        break
+                    follow_result = chat.run_plan(follow_tasks, review=self.review, fix=self.fix, max_fixes=self.max_fixes)
+                    print(_line())
+                    for key, value in follow_result.items():
+                        if key == "errors":
+                            print(f"errors: {len(value)}")
+                            for item in value:
+                                print(f"  - {item}")
+                        elif key != "plan_summary":
+                            print(f"{key}: {value}")
+                    result = follow_result
+                    target = Path(result.get("target_file", "output.py"))
+                    if target.exists() and target.stat().st_size <= 20000:
+                        print(_line())
+                        print(target.read_text(encoding="utf-8", errors="replace"))
+                print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
             except Exception as exc:  # noqa: BLE001
                 print(f"Error: {exc}")
-            _prompt("Press Enter to continue", "")
+            # Let the orchestrator loop continue immediately; session is saved after each plan.
 
     def _chat_mode_name(self) -> str:
         return "auto"

@@ -41,6 +41,7 @@ def main() -> int:
     run.add_argument("--no-review", action="store_true", help="skip review phase")
     run.add_argument("--no-fix", action="store_true", help="skip line fixes")
     run.add_argument("--max-fixes", type=int, help="maximum review fixes")
+    run.add_argument("--reasoning-effort", choices=["low", "medium", "high"], help="reasoning effort for supported providers")
     run.add_argument("--report", help="write JSON report to this path")
     run.add_argument("--quiet", action="store_true", help="suppress progress")
 
@@ -96,6 +97,8 @@ def main() -> int:
             config.max_tokens = args.max_tokens
         if args.workers is not None:
             config.workers = args.workers
+        if args.reasoning_effort is not None:
+            config.llm.reasoning_effort = args.reasoning_effort
         config.validate()
     except Exception as exc:  # noqa: BLE001
         print(f"config error: {exc}", file=sys.stderr)

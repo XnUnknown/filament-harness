@@ -6,6 +6,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .agent_tools import Toolbox
 from .config import HarnessConfig
 from .context_compress import compress_messages
 from .llm import build_client
@@ -98,6 +99,7 @@ class ChatOrchestrator:
         self.shell_cwd = str(Path(shell_cwd).resolve())
         self.mode = mode
         self.client = build_client(config.llm)
+        self.toolbox = Toolbox(self.shell_cwd, config)
         self.session = session or create_session(self.shell_cwd, mode)
         self.session.mode = mode
         self.messages: list[dict[str, Any]] = list(self.session.messages)
@@ -109,7 +111,11 @@ class ChatOrchestrator:
     def plan(self, request: str) -> tuple[str, list[dict[str, Any]]]:
         self.messages.append({"role": "user", "content": request})
         self.history.append(request)
-        prompt = f"User request: {request}\n\nReturn the JSON plan now."
+        context = self._context_text(limit_tokens=max(512, self.config.effective_max_tokens // 4))
+        prompt = (
+            (f"Recent context:\n{context}\n\n" if context else "")
+            + f"User request: {request}\n\nReturn the JSON plan now."
+        )
         raw = self.client.generate(prompt, system=PLAN_SYSTEM)
         try:
             data = _extract_json(raw)
@@ -164,8 +170,73 @@ class ChatOrchestrator:
         self.session.files_changed = sorted(set(self.session.files_changed + list(result.get("targets", {}).keys())))
         self.session.touch()
         save_session(self.session, self.shell_cwd)
+        self.messages.append({"role": "assistant", "content": f"EXECUTION: {result}"})
+        self.compress_if_needed()
         result["plan_summary"] = ""
         return result
+
+    def _context_text(self, limit_tokens: int = 1000) -> str:
+        lines = []
+        for message in self.messages[-12:]:
+            role = message.get("role", "user")
+            content = str(message.get("content", "")).strip()
+            if content:
+                lines.append(f"{role}: {content}")
+        text = "\n".join(lines)
+        max_chars = max(256, limit_tokens * self.config.chars_per_token)
+        if len(text) > max_chars:
+            text = text[-max_chars:]
+        return text
+
+    def reflect(self, execution_result: dict) -> tuple[str, list[dict[str, Any]]] | None:
+        """Ask the orchestrator whether another pass is needed after execution."""
+        from .agent_tools import Toolbox
+
+        _ = Toolbox
+        target = execution_result.get("target_file", "output.py")
+        snippets = []
+        try:
+            snippets.append(self.toolbox.read_file(target, max_chars=8000))
+        except Exception:  # noqa: BLE001
+            snippets.append("(target file unavailable)")
+        context = self._context_text()
+        prompt = (
+            f"Recent context:\n{context}\n\n"
+            f"Execution result: {execution_result}\n"
+            f"Generated file contents:\n{snippets[0]}\n\n"
+            "Decide whether the work is complete. Return JSON only: "
+            "{\"action\":\"done\",\"content\":\"short summary\"} or "
+            "{\"action\":\"plan\",\"summary\":\"...\",\"tasks\":[...]}."
+        )
+        system = "You are an autonomous coding orchestrator. Prefer done unless there is a clear defect."
+        try:
+            raw = self.client.generate(prompt, system=system)
+            data = _extract_json(raw)
+        except Exception:  # noqa: BLE001
+            return None
+        action = str(data.get("action") or "").lower()
+        if action == "plan":
+            tasks = data.get("tasks")
+            if not isinstance(tasks, list) or not tasks:
+                return None
+            normalized = []
+            for index, item in enumerate(tasks[:MAX_PLAN_TASKS], 1):
+                if isinstance(item, str):
+                    normalized.append({"id": f"task{index}", "task": item, "target": target})
+                elif isinstance(item, dict):
+                    task_text = str(item.get("task") or item.get("instruction") or "").strip()
+                    if task_text:
+                        normalized.append(
+                            {
+                                "id": str(item.get("id") or f"task{index}"),
+                                "task": task_text,
+                                "target": _sanitize_target(item.get("target") or target),
+                            }
+                        )
+            if not normalized:
+                return None
+            return str(data.get("summary") or "Follow-up plan"), normalized
+        return None
 
     def direct_chat(self, request: str) -> str:
         self.messages.append({"role": "user", "content": request})

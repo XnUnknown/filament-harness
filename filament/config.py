@@ -15,6 +15,7 @@ class LLMConfig:
     base_url: str | None = None
     api_key: str | None = None
     timeout: int = 120
+    reasoning_effort: str | None = None
     use_ollama_env: bool = False
 
     def validate(self) -> None:
@@ -26,6 +27,8 @@ class LLMConfig:
             raise ValueError("llm base_url must be http(s)")
         if self.timeout < 1:
             raise ValueError("llm timeout must be positive")
+        if self.reasoning_effort is not None and self.reasoning_effort not in {"low", "medium", "high"}:
+            raise ValueError("reasoning_effort must be low, medium, high, or unset")
         if self.kind in {"openai", "anthropic"}:
             key = self.api_key or os.environ.get("FILAMENT_API_KEY")
             # Local OpenAI-compatible servers may omit keys; require for hosted endpoints.
@@ -138,6 +141,7 @@ def load_config(path: str | Path | None = None) -> HarnessConfig:
         "FILAMENT_API_KEY": ("llm.api_key", str),
         "FILAMENT_CLIENT": ("llm.kind", str),
         "FILAMENT_TIMEOUT": ("llm.timeout", int),
+        "FILAMENT_REASONING_EFFORT": ("llm.reasoning_effort", str),
     }
     for env_name, (field_path, cast) in env_map.items():
         value = os.environ.get(env_name)
