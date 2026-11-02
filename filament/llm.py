@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -168,8 +169,28 @@ class AnthropicClient:
 def _is_local_url(url: str | None) -> bool:
     if not url:
         return False
-    lowered = url.lower()
-    return "localhost" in lowered or "127.0.0.1" in lowered or "[::1]" in lowered or "::1" in lowered
+    text = str(url).strip()
+    if not text:
+        return False
+    host = None
+    try:
+        host = urllib.parse.urlsplit(text).hostname
+    except (ValueError, AttributeError):
+        host = None
+    if host is None:
+        host = text.split("/", 1)[0]
+        host = host.strip()
+        if host.startswith("["):
+            closing = host.find("]")
+            if closing != -1:
+                host = host[1:closing]
+            else:
+                host = host.strip("[]")
+        elif host.count(":") <= 1 and ":" in host:
+            host = host.split(":", 1)[0]
+        host = host.strip("[]").strip()
+    host = str(host).lower().strip("[]")
+    return host in {"localhost", "127.0.0.1", "::1"}
 
 
 def build_client(llm_config: Any) -> LLMClient:
