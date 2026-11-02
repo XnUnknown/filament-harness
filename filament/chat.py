@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import HarnessConfig, load_config
@@ -22,12 +22,49 @@ PLAN_SYSTEM = (
 )
 
 
+MAX_PLAN_TASKS = 6
+
+
+def _sanitize_target(value: Any) -> str:
+    """Accept only safe relative paths from untrusted planner output."""
+    target = str(value or "").strip().replace("\\", "/")
+    if not target:
+        return "output.py"
+    candidate = PurePosixPath(target)
+    if (
+        target.startswith("/")
+        or candidate.is_absolute()
+        or ".." in candidate.parts
+        or any(part in {"", ".", ".."} or ":" in part for part in candidate.parts)
+    ):
+        return "output.py"
+    normalized = str(candidate)
+    return normalized if normalized and normalized != "." else "output.py"
+
+
 def _extract_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        text = match.group(0)
-    return json.loads(text)
+    if not isinstance(text, str):
+        raise TypeError("planner response must be a string")
+    cleaned = text.strip()
+    # Remove a surrounding markdown code fence if the model added one.
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    start = cleaned.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found in planner response")
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+        return obj
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
 
 
 class ChatOrchestrator:
@@ -46,20 +83,20 @@ class ChatOrchestrator:
             tasks = data.get("tasks") or []
             if not isinstance(tasks, list) or not tasks:
                 raise ValueError("plan has no tasks")
+            task_cap = min(self.config.max_tasks, MAX_PLAN_TASKS)
             normalized = []
-            for index, item in enumerate(tasks[: self.config.max_tasks], 1):
+            for index, item in enumerate(tasks[:task_cap], 1):
                 if isinstance(item, str):
-                    normalized.append({"id": f"task{index}", "task": item, "target": "output.py"})
+                    normalized.append({"id": f"task{index}", "task": item.strip(), "target": "output.py"})
                 elif isinstance(item, dict):
                     task_text = str(item.get("task") or item.get("instruction") or "").strip()
                     if not task_text:
                         continue
-                    target = str(item.get("target") or "output.py").strip()
                     normalized.append(
                         {
-                            "id": str(item.get("id") or f"task{index}"),
+                            "id": str(item.get("id") or f"task{index}").strip() or f"task{index}",
                             "task": task_text,
-                            "target": target or "output.py",
+                            "target": _sanitize_target(item.get("target")),
                         }
                     )
             if not normalized:
