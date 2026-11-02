@@ -6,9 +6,11 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .config import HarnessConfig, load_config
+from .config import HarnessConfig
+from .context_compress import compress_messages
 from .llm import build_client
 from .orchestrator import Orchestrator
+from .session import Session, create_session, load_session, save_session, list_sessions as list_session_files
 
 
 PLAN_SYSTEM = (
@@ -67,14 +69,46 @@ def _extract_json(text: str) -> dict[str, Any]:
         raise
 
 
+_SMALL_TALK = {
+    "hello", "hi", "hey", "thanks", "thank you", "who are you", "how are you",
+    "good morning", "good evening", "what can you do", "help",
+}
+
+
+def is_small_talk(request: str) -> bool:
+    cleaned = request.strip().lower().rstrip("!.? ")
+    if cleaned in _SMALL_TALK:
+        return True
+    code_words = {"build", "create", "write", "fix", "test", "run", "read", "analyze", "refactor", "debug", "implement"}
+    words = set(cleaned.split())
+    if len(words) <= 4 and not (words & code_words):
+        return True
+    return False
+
+
 class ChatOrchestrator:
-    def __init__(self, config: HarnessConfig, shell_cwd: str = "."):
+    def __init__(
+        self,
+        config: HarnessConfig,
+        shell_cwd: str = ".",
+        mode: str = "auto",
+        session: Session | None = None,
+    ):
         self.config = config
-        self.shell_cwd = shell_cwd
+        self.shell_cwd = str(Path(shell_cwd).resolve())
+        self.mode = mode
         self.client = build_client(config.llm)
+        self.session = session or create_session(self.shell_cwd, mode)
+        self.session.mode = mode
+        self.messages: list[dict[str, Any]] = list(self.session.messages)
         self.history: list[str] = []
+        for message in self.messages:
+            if message.get("role") == "user":
+                self.history.append(str(message.get("content", "")))
 
     def plan(self, request: str) -> tuple[str, list[dict[str, Any]]]:
+        self.messages.append({"role": "user", "content": request})
+        self.history.append(request)
         prompt = f"User request: {request}\n\nReturn the JSON plan now."
         raw = self.client.generate(prompt, system=PLAN_SYSTEM)
         try:
@@ -101,9 +135,15 @@ class ChatOrchestrator:
                     )
             if not normalized:
                 raise ValueError("plan tasks were empty")
+            self.messages.append({"role": "assistant", "content": f"PLAN: {summary}"})
+            self.session.messages = self.messages
+            save_session(self.session, self.shell_cwd)
+            self.compress_if_needed()
             return summary, normalized
         except (json.JSONDecodeError, ValueError, TypeError):
-            # Fall back to a single focused agent if the model cannot plan JSON.
+            self.messages.append({"role": "assistant", "content": "Fallback single-task plan"})
+            self.session.messages = self.messages
+            save_session(self.session, self.shell_cwd)
             return "Fallback single-task plan", [
                 {"id": "task1", "task": request, "target": "output.py"}
             ]
@@ -121,8 +161,57 @@ class ChatOrchestrator:
             allow_outside_target=self.config.allow_outside_target,
         )
         result = orchestrator.run(tasks, "output.py", review=review, fix=fix, max_fixes=max_fixes)
+        self.session.files_changed = sorted(set(self.session.files_changed + list(result.get("targets", {}).keys())))
+        self.session.touch()
+        save_session(self.session, self.shell_cwd)
         result["plan_summary"] = ""
         return result
+
+    def direct_chat(self, request: str) -> str:
+        self.messages.append({"role": "user", "content": request})
+        try:
+            response = self.client.generate(request, system="You are a helpful coding assistant. Be concise.")
+        except Exception as exc:  # noqa: BLE001
+            response = f"Unable to respond: {exc}"
+        self.messages.append({"role": "assistant", "content": response})
+        self.session.messages = self.messages
+        save_session(self.session, self.shell_cwd)
+        self.compress_if_needed()
+        return response
+
+    def is_small_talk(self, request: str) -> bool:
+        return is_small_talk(request)
+
+    def compress_if_needed(self) -> bool:
+        compressed, changed = compress_messages(
+            self.client,
+            self.messages,
+            self.config.effective_max_tokens,
+            self.config.chars_per_token,
+        )
+        if changed:
+            self.messages = compressed
+            self.session.messages = self.messages
+            save_session(self.session, self.shell_cwd)
+        return changed
+
+    def save(self) -> Path:
+        self.session.messages = self.messages
+        self.session.mode = self.mode
+        return save_session(self.session, self.shell_cwd)
+
+    def load_session(self, session_id: str) -> None:
+        from .session import load_session as _load
+
+        session = _load(session_id, self.shell_cwd)
+        self.session = session
+        self.mode = session.mode
+        self.messages = list(session.messages)
+        self.history = [m["content"] for m in self.messages if m.get("role") == "user"]
+
+    @staticmethod
+    def list_sessions(cwd: str | Path) -> list:
+        return list_session_files(cwd)
 
     def run_request(
         self,

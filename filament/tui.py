@@ -276,43 +276,93 @@ class TUIApp:
     def chat_mode(self) -> None:
         from filament.chat import ChatOrchestrator
 
-        chat = ChatOrchestrator(self.config, self.shell_cwd)
+        chat = ChatOrchestrator(self.config, self.shell_cwd, mode=self._chat_mode_name())
         print("Chat with main orchestrator")
         print(_line())
+        print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
+        print("Commands: /mode auto|plan|review|accept, /sessions, /load <id>, /compress, /config, exit")
         print("Type your request, or 'exit' to return.")
         while True:
             request = _prompt("You")
             if not request or request.lower() in {"exit", "quit", "q"}:
+                chat.save()
                 return
             try:
+                if request.startswith("/"):
+                    self._handle_chat_command(chat, request)
+                    continue
+                if chat.is_small_talk(request):
+                    print("Orchestrator:", chat.direct_chat(request))
+                    continue
                 summary, tasks = chat.plan(request)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Planning failed: {exc}")
-                continue
-            print(f"Orchestrator: {summary}")
-            print("Planned tasks:")
-            for task in tasks:
-                print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
-            if not _prompt_bool("Run this plan now?", True):
-                continue
-            try:
+                print(f"Orchestrator: {summary}")
+                print("Planned tasks:")
+                for task in tasks:
+                    print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
+                should_run = chat.mode == "auto" or _prompt_bool("Run this plan now?", True)
+                if not should_run:
+                    continue
                 result = chat.run_plan(tasks, review=self.review, fix=self.fix, max_fixes=self.max_fixes)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Run failed: {exc}")
-                continue
-            print(_line())
-            for key, value in result.items():
-                if key == "errors":
-                    print(f"errors: {len(value)}")
-                    for item in value:
-                        print(f"  - {item}")
-                elif key != "plan_summary":
-                    print(f"{key}: {value}")
-            target = Path(result.get("target_file", "output.py"))
-            if target.exists() and target.stat().st_size <= 20000:
                 print(_line())
-                print(target.read_text(encoding="utf-8", errors="replace"))
+                for key, value in result.items():
+                    if key == "errors":
+                        print(f"errors: {len(value)}")
+                        for item in value:
+                            print(f"  - {item}")
+                    elif key != "plan_summary":
+                        print(f"{key}: {value}")
+                target = Path(result.get("target_file", "output.py"))
+                if target.exists() and target.stat().st_size <= 20000:
+                    print(_line())
+                    print(target.read_text(encoding="utf-8", errors="replace"))
+                print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Error: {exc}")
             _prompt("Press Enter to continue", "")
+
+    def _chat_mode_name(self) -> str:
+        return "auto"
+
+    def _handle_chat_command(self, chat, command: str) -> None:
+        from filament.chat import ChatOrchestrator  # noqa: F401
+
+        parts = command.strip().split()
+        name = parts[0].lower()
+        if name == "/mode":
+            if len(parts) != 2 or parts[1].lower() not in {"auto", "plan", "review", "accept"}:
+                print("Usage: /mode auto|plan|review|accept")
+                return
+            chat.mode = parts[1].lower()
+            chat.session.mode = chat.mode
+            chat.save()
+            print(f"Mode set to {chat.mode}.")
+            return
+        if name == "/sessions":
+            sessions = ChatOrchestrator.list_sessions(self.shell_cwd)
+            if not sessions:
+                print("(no saved sessions)")
+                return
+            for session in sessions[:20]:
+                print(f"{session.session_id}  mode={session.mode}  updated={session.updated_at:.0f}")
+            return
+        if name == "/load":
+            if len(parts) != 2:
+                print("Usage: /load <session_id>")
+                return
+            try:
+                chat.load_session(parts[1])
+                print(f"Loaded session {parts[1]} (mode={chat.mode}).")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Load failed: {exc}")
+            return
+        if name == "/compress":
+            changed = chat.compress_if_needed()
+            print("Context compressed." if changed else "No compression needed.")
+            return
+        if name == "/config":
+            print(f"cwd={self.shell_cwd} mode={chat.mode} session={chat.session.session_id}")
+            return
+        print("Unknown command. Commands: /mode, /sessions, /load, /compress, /config")
 
     def run_tasks(self) -> None:
         _clear()
