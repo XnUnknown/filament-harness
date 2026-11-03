@@ -18,6 +18,10 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
 ]
 
+[tool.setuptools]
+packages = ["filament"]
+
 [project.scripts]
 filament = "filament.cli:main"
 filament-tui = "filament.tui:run_tui"
+
