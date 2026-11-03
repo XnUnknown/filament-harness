@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Filament Harness</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <h1>Filament</h1>
+    <label>Mode
+      <select id="mode">
+        <option value="auto">auto</option>
+        <option value="plan">plan</option>
+        <option value="review">review</option>
+        <option value="accept">accept</option>
+      </select>
+    </label>
+    <button id="new-session">New session</button>
+    <button id="list-sessions">List sessions</button>
+    <pre id="session-info"></pre>
+    <button id="compress">Compress context</button>
+  </aside>
+  <main>
+    <header>
+      <h2>Agent chat</h2>
+      <span id="status">Starting backend...</span>
+    </header>
+    <section id="transcript"></section>
+    <form id="composer">
+      <input id="message" type="text" placeholder="Ask Filament to build or fix something" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
