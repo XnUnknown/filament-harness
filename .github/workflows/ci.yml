@@ -45,6 +45,15 @@ jobs:
           test -f output.py
           rm -f output.py
 
+      - name: Electron dependencies
+        working-directory: electron
+        run: npm install --foreground-scripts
+
+      - name: Electron syntax checks
+        working-directory: electron
+        shell: bash
+        run: node --check main.js && node --check preload.js && node --check renderer/app.js
+
   build:
     runs-on: windows-latest
     needs: test

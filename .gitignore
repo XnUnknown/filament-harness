@@ -9,5 +9,6 @@ build/
 .filament/
 electron/node_modules/
 electron/dist/
+electron/.cache/
 workspace/
 *.log
