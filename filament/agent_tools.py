@@ -67,6 +67,8 @@ class Toolbox:
             stripped = command.lstrip()
             if not any(stripped.startswith(prefix) for prefix in self.config.command_allowlist):
                 raise ValueError("command is not on the configured allowlist")
+            if any(ch in command for ch in ("\n", "\r", ";", "|", "&", "`", "$", "<", ">", "(", ")", "{", "}")):
+                raise ValueError("command contains shell metacharacters not permitted with an allowlist")
 
         timeout = timeout or self.config.timeout_shell
         use_shell = self.config.use_shell

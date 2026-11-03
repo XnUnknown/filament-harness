@@ -36,6 +36,9 @@ class Toolset:
             stripped = command.lstrip()
             if not any(stripped.startswith(prefix) for prefix in self.config.command_allowlist):
                 raise ValueError("command is not on the configured allowlist")
+            # Prevent command chaining/redirection when allowlist is active.
+            if any(ch in command for ch in ("\n", "\r", ";", "|", "&", "`", "$", "<", ">", "(", ")", "{", "}")):
+                raise ValueError("command contains shell metacharacters not permitted with an allowlist")
 
         from pathlib import Path
 

@@ -69,6 +69,11 @@ class HarnessConfig:
             raise ValueError("timeout_shell must be at least 1")
         if self.max_shell_output < 256:
             raise ValueError("max_shell_output must be at least 256")
+        if not isinstance(self.command_allowlist, list):
+            raise ValueError("command_allowlist must be a list")
+        for prefix in self.command_allowlist:
+            if not isinstance(prefix, str) or not prefix.strip():
+                raise ValueError("command_allowlist entries must be non-empty strings")
         self.llm.validate()
         return self
 

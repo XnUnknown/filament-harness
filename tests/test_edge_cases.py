@@ -60,6 +60,17 @@ class TestEdgeCases(unittest.TestCase):
                 tools.run_shell("printf nope")
 
 
+    def test_toolbox_run_shell_rejects_shell_metacharacters(self):
+        from filament.agent_tools import Toolbox
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = HarnessConfig(use_shell=True, command_allowlist=["echo"])
+            tools = Toolbox(d, cfg)
+            with self.assertRaises(ValueError):
+                tools.run_shell("echo ok; rm -rf /")
+            with self.assertRaises(ValueError):
+                tools.run_shell("echo ok | cat")
+
     def test_ensure_target_rejects_null_byte(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
