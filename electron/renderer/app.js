@@ -50,6 +50,18 @@ form.addEventListener("submit", async (event) => {
   await sendMessage(message);
 });
 
+document.getElementById("select-workspace").addEventListener("click", async () => {
+  try {
+    const result = await window.filament.selectWorkspace();
+    if (!result) return;
+    renderBubble(`Workspace selected: ${result.path}`, "system");
+    const config = await window.filament.command("get_config", {});
+    renderBubble(`Config loaded for ${config && config.llm ? config.llm.kind : "unknown"} / ${config && config.llm ? config.llm.model : ""}`, "system");
+  } catch (error) {
+    renderBubble("Error: " + error.message, "system");
+  }
+});
+
 document.getElementById("new-session").addEventListener("click", async () => {
   try {
     const result = await window.filament.command("new_session", { mode: modeSelect.value });
