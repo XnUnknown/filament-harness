@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const { spawn } = require("child_process");
 const readline = require("readline");
 const path = require("path");
@@ -84,6 +84,14 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (backend) backend.kill();
   if (process.platform !== "darwin") app.quit();
+});
+
+ipcMain.handle("filament:select-workspace", async () => {
+  const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
+  if (result.canceled || !result.filePaths.length) return null;
+  const selected = result.filePaths[0];
+  const backendResult = await sendCommand("select_workspace", { path: selected });
+  return { path: selected, result: backendResult };
 });
 
 ipcMain.handle("filament:command", async (_event, method, params) => {
