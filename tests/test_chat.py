@@ -23,6 +23,9 @@ class TestChatPlanning(unittest.TestCase):
         self.assertEqual(_sanitize_target(None), "output.py")
         self.assertEqual(_sanitize_target("nested/out.py"), "nested/out.py")
 
+    def test_sanitizes_null_bytes(self):
+        self.assertEqual(_sanitize_target("safe\x00evil.py"), "output.py")
+
     def test_max_plan_tasks_cap(self):
         self.assertEqual(MAX_PLAN_TASKS, 6)
 

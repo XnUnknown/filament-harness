@@ -31,6 +31,8 @@ MAX_PLAN_TASKS = 6
 def _sanitize_target(value: Any) -> str:
     """Accept only safe relative paths from untrusted planner output."""
     target = str(value or "").strip().replace("\\", "/")
+    if "\x00" in target:
+        return "output.py"
     if not target:
         return "output.py"
     candidate = PurePosixPath(target)
