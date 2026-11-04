@@ -82,7 +82,7 @@ def _apply_config(config: HarnessConfig, updates: dict[str, Any]) -> HarnessConf
 
 def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "ping":
-        return {"version": "0.4.4", "workspace": str(STATE["workspace"] or Path.cwd())}
+        return {"version": "0.4.5", "workspace": str(STATE["workspace"] or Path.cwd())}
     if method == "get_config":
         if STATE["config"] is None:
             _load_workspace(str(Path.cwd()))
