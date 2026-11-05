@@ -107,5 +107,27 @@ class TestEdgeCases(unittest.TestCase):
                 client.generate("hello")
 
 
+    def test_one_line_replacement_ignores_unextractable_fence(self):
+        from filament.config import HarnessConfig
+        from filament.orchestrator import Orchestrator
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            orch = Orchestrator(client_kind="mock", config=HarnessConfig(), shell_cwd=d)
+            self.assertEqual(orch._one_line_replacement("```\n\n```"), "")
+
+    def test_ensure_target_rejects_control_characters(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            with self.assertRaises(ValueError):
+                ensure_target_within_root("safe\npath.py", root)
+
+    def test_append_code_atomic_roundtrip(self):
+        from filament.files import append_code
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "x.py"
+            path.write_text("old\n", encoding="utf-8")
+            append_code(path, "new\n", atomic=True)
+            self.assertEqual(path.read_text(encoding="utf-8"), "old\nnew\n")
+
 if __name__ == "__main__":
     unittest.main()

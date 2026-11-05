@@ -26,6 +26,16 @@ class TestChatPlanning(unittest.TestCase):
     def test_sanitizes_null_bytes(self):
         self.assertEqual(_sanitize_target("safe\x00evil.py"), "output.py")
 
+    def test_sanitizes_control_characters(self):
+        self.assertEqual(_sanitize_target("safe\nevil.py"), "output.py")
+        self.assertEqual(_sanitize_target("safe\tevil.py"), "output.py")
+
+    def test_extract_json_rejects_non_object(self):
+        with self.assertRaises(ValueError):
+            _extract_json("[]")
+        with self.assertRaises(ValueError):
+            _extract_json("```json\n[1, 2]\n```")
+
     def test_max_plan_tasks_cap(self):
         self.assertEqual(MAX_PLAN_TASKS, 6)
 

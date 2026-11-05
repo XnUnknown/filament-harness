@@ -64,6 +64,8 @@ def replace_line(path: str | Path, line_no: int, new_text: str) -> None:
     """Replace an existing 1-indexed line with new_text atomically."""
     if "\x00" in str(path):
         raise ValueError("path contains a null byte")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(path)):
+        raise ValueError("path contains a control character")
     p = Path(path)
     raw = p.read_text(encoding="utf-8")
     lines = raw.splitlines(keepends=True)
@@ -106,6 +108,8 @@ def replace_line(path: str | Path, line_no: int, new_text: str) -> None:
 def ensure_target_within_root(target: str | Path, root: str | Path, allow_outside: bool = False) -> Path:
     if "\x00" in str(target) or "\x00" in str(root):
         raise ValueError("path contains a null byte")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(target) + str(root)):
+        raise ValueError("path contains a control character")
     target_path = Path(target).expanduser()
     if not target_path.is_absolute():
         target_path = Path(root).expanduser() / target_path

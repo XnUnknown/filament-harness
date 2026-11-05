@@ -16,6 +16,8 @@ class Toolbox:
     def _safe(self, path: str | Path) -> Path:
         if "\x00" in str(path):
             raise ValueError("path contains a null byte")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(path)):
+            raise ValueError("path contains a control character")
         candidate = Path(path).expanduser()
         if not candidate.is_absolute():
             candidate = self.root / candidate
