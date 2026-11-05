@@ -198,7 +198,7 @@ def build_client(llm_config: Any) -> LLMClient:
     kind = kind.lower().strip()
     model = getattr(llm_config, "model", None) or "llama3.2"
     base_url = getattr(llm_config, "base_url", None)
-    api_key = getattr(llm_config, "api_key", None) or os.environ.get("FILAMENT_API_KEY")
+    api_key = getattr(llm_config, "api_key", None)
     timeout = getattr(llm_config, "timeout", 120) or 120
     reasoning_effort = getattr(llm_config, "reasoning_effort", None)
     use_ollama_env = bool(getattr(llm_config, "use_ollama_env", False))
@@ -208,6 +208,12 @@ def build_client(llm_config: Any) -> LLMClient:
             kind = "ollama"
         else:
             kind = "mock"
+
+    if api_key is None:
+        if kind == "ollama":
+            api_key = os.environ.get("FILAMENT_API_KEY") or os.environ.get("OLLAMA_API_KEY")
+        else:
+            api_key = os.environ.get("FILAMENT_API_KEY")
 
     if kind == "mock":
         return MockLLM()

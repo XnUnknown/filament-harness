@@ -50,7 +50,7 @@ Filament supports:
 - `openai` for OpenAI and OpenAI-compatible endpoints (Groq, Together, vLLM, LM Studio, etc.)
 - `anthropic` for Anthropic Messages API
 
-Use `--client openai --model ...` with `FILAMENT_API_KEY`, or configure `[llm]` in TOML.
+Use `--client openai --model ...` with `FILAMENT_API_KEY`, or configure `[llm]` in TOML. Ollama cloud endpoints may use either `FILAMENT_API_KEY` or `OLLAMA_API_KEY`.
 
 ## TUI
 

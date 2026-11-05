@@ -31,10 +31,16 @@ class LLMConfig:
             raise ValueError("llm timeout must be positive")
         if self.reasoning_effort is not None and self.reasoning_effort not in {"low", "medium", "high"}:
             raise ValueError("reasoning_effort must be low, medium, high, or unset")
-        if self.kind in {"openai", "anthropic"}:
-            key = self.api_key or os.environ.get("FILAMENT_API_KEY")
-            # Local OpenAI-compatible servers may omit keys; require for hosted endpoints.
-            local = bool(self.base_url) and _is_local_url(self.base_url)
+        if self.kind in {"openai", "anthropic", "ollama"}:
+            if self.kind == "ollama":
+                key = self.api_key or os.environ.get("FILAMENT_API_KEY") or os.environ.get("OLLAMA_API_KEY")
+                # Ollama defaults to a local server, so keys are optional there.
+                url_for_local = self.base_url or os.environ.get("FILAMENT_OLLAMA_URL") or "http://localhost:11434"
+                local = _is_local_url(url_for_local)
+            else:
+                key = self.api_key or os.environ.get("FILAMENT_API_KEY")
+                # Local OpenAI-compatible servers may omit keys; require for hosted endpoints.
+                local = bool(self.base_url) and _is_local_url(self.base_url)
             if not key and not local:
                 raise ValueError(f"api_key is required for {self.kind} provider")
 
@@ -164,6 +170,13 @@ def load_config(path: str | Path | None = None) -> HarnessConfig:
             data.setdefault(section, {})[key] = converted
         else:
             data[field_path] = converted
+
+    # Ollama cloud credentials may be provided under their native variable name.
+    ollama_key = os.environ.get("OLLAMA_API_KEY")
+    if ollama_key and not os.environ.get("FILAMENT_API_KEY") and not data.get("llm", {}).get("api_key"):
+        current_kind = data.get("llm", {}).get("kind")
+        if current_kind in (None, "auto", "ollama"):
+            data.setdefault("llm", {})["api_key"] = ollama_key
 
     if os.environ.get("FILAMENT_USE_OLLAMA") == "1":
         data.setdefault("llm", {})["kind"] = "ollama"

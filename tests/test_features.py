@@ -38,6 +38,43 @@ class TestProviders(unittest.TestCase):
             if old is not None:
                 os.environ["FILAMENT_API_KEY"] = old
 
+    def test_ollama_cloud_requires_key(self):
+        from filament.config import LLMConfig
+        import os
+
+        saved = {}
+        for key in ("FILAMENT_API_KEY", "OLLAMA_API_KEY", "FILAMENT_OLLAMA_URL"):
+            saved[key] = os.environ.pop(key, None)
+        try:
+            with self.assertRaises(ValueError):
+                LLMConfig(kind="ollama", base_url="https://ollama.com").validate()
+            # Local endpoints remain usable without credentials.
+            LLMConfig(kind="ollama", base_url="http://localhost:11434").validate()
+        finally:
+            for key, value in saved.items():
+                if value is not None:
+                    os.environ[key] = value
+
+    def test_ollama_api_key_env_fallback(self):
+        from filament.config import LLMConfig
+        from filament.llm import build_client
+        import os
+
+        saved = {}
+        for key in ("FILAMENT_API_KEY", "OLLAMA_API_KEY", "FILAMENT_OLLAMA_URL"):
+            saved[key] = os.environ.pop(key, None)
+        try:
+            os.environ["OLLAMA_API_KEY"] = "secret"
+            # Validation accepts OLLAMA_API_KEY for hosted Ollama.
+            LLMConfig(kind="ollama", base_url="https://ollama.com").validate()
+            client = build_client(LLMConfig(kind="ollama", base_url="https://ollama.com"))
+            self.assertEqual(getattr(client, "api_key", None), "secret")
+        finally:
+            for key, value in saved.items():
+                if value is not None:
+                    os.environ[key] = value
+            os.environ.pop("OLLAMA_API_KEY", None)
+
 
 class TestReview(unittest.TestCase):
     def test_parse_fixes(self):

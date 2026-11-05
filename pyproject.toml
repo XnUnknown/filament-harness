@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "filament-harness"
-version = "0.4.6"
+version = "0.4.7"
 description = "Lightweight coding harness for local LLMs with bounded context, parallel agents, and config support"
 readme = "README.md"
 requires-python = ">=3.11"
