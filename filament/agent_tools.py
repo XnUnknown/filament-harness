@@ -38,11 +38,36 @@ class Toolbox:
     def write_file(self, path: str | Path, content: str, append: bool = False) -> str:
         target = self._safe(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if append else "w"
-        with target.open(mode, encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
+        atomic = bool(getattr(self.config, "atomic_writes", False))
+
+        if append:
+            from .files import append_code
+            append_code(target, content, atomic=atomic)
+            return f"wrote {len(content)} chars to {target.relative_to(self.root)}"
+
+        if atomic:
+            import tempfile
+            fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if target.exists():
+                    try:
+                        os.chmod(temp_name, target.stat().st_mode)
+                    except OSError:
+                        pass
+                os.replace(Path(temp_name), target)
+            finally:
+                leftover = Path(temp_name)
+                if leftover.exists():
+                    leftover.unlink(missing_ok=True)
+        else:
+            with target.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
         return f"wrote {len(content)} chars to {target.relative_to(self.root)}"
 
     def list_dir(self, path: str | Path = ".") -> str:

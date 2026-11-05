@@ -85,6 +85,19 @@ class TestEdgeCases(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tools._safe("evil" + chr(0) + ".py")
 
+    def test_toolbox_write_file_atomic(self):
+        from filament.agent_tools import Toolbox
+        from filament.config import HarnessConfig
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = HarnessConfig(atomic_writes=True)
+            tools = Toolbox(d, cfg)
+            result = tools.write_file("atomic.txt", "hello", append=False)
+            self.assertIn("wrote 5 chars", result)
+            self.assertEqual((Path(d) / "atomic.txt").read_text(encoding="utf-8"), "hello")
+            tools.write_file("atomic.txt", " world", append=True)
+            self.assertEqual((Path(d) / "atomic.txt").read_text(encoding="utf-8"), "hello world\n")
+
     def test_ollama_client_failure_raises_runtimeerror(self):
         from unittest.mock import patch
 

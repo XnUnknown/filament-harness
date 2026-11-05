@@ -58,7 +58,10 @@ class Orchestrator:
 
     def _one_line_replacement(self, text: str) -> str:
         raw = text.strip()
-        code = extract_code(raw) if "```" in raw else raw
+        try:
+            code = extract_code(raw) if "```" in raw else raw
+        except (TypeError, ValueError):
+            code = raw
         lines = [line for line in code.splitlines() if line.strip()]
         if len(lines) != 1:
             return ""
@@ -121,7 +124,7 @@ class Orchestrator:
 
         appended_counts: dict[str, int] = {}
         for _, target_path, code in extracted:
-            append_code(target_path, code)
+            append_code(target_path, code, atomic=self.config.atomic_writes)
             appended_counts[str(target_path)] = appended_counts.get(str(target_path), 0) + 1
 
         main_target = ensure_target_within_root(

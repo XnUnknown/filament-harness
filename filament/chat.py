@@ -31,7 +31,7 @@ MAX_PLAN_TASKS = 6
 def _sanitize_target(value: Any) -> str:
     """Accept only safe relative paths from untrusted planner output."""
     target = str(value or "").strip().replace("\\", "/")
-    if "\x00" in target:
+    if "\x00" in target or any(ord(char) < 32 or ord(char) == 127 for char in target):
         return "output.py"
     if not target:
         return "output.py"
@@ -64,11 +64,16 @@ def _extract_json(text: str) -> dict[str, Any]:
         raise ValueError("no JSON object found in planner response")
     try:
         obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+        if not isinstance(obj, dict):
+            raise ValueError("planner response must be a JSON object")
         return obj
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if match:
-            return json.loads(match.group(0))
+            parsed = json.loads(match.group(0))
+            if not isinstance(parsed, dict):
+                raise ValueError("planner response must be a JSON object")
+            return parsed
         raise
 
 
