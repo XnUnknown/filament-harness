@@ -129,5 +129,35 @@ class TestEdgeCases(unittest.TestCase):
             append_code(path, "new\n", atomic=True)
             self.assertEqual(path.read_text(encoding="utf-8"), "old\nnew\n")
 
+    def test_compress_summary_overflow_keeps_recent(self):
+        from filament.context_compress import compress_messages
+
+        class BigClient:
+            def generate(self, prompt, system=None):
+                return "X" * 100000
+
+        messages = [{"role": "user", "content": "a" * 60} for _ in range(8)]
+        compressed, changed = compress_messages(BigClient(), messages, max_tokens=64, keep_last=3, threshold=0.1)
+        self.assertTrue(changed)
+        self.assertEqual(compressed, messages[-3:])
+
+    def test_compress_transcript_is_bounded(self):
+        from filament.context_compress import compress_messages
+
+        captured = {}
+
+        class CapturingClient:
+            def generate(self, prompt, system=None):
+                captured["prompt"] = prompt
+                return "summary"
+
+        messages = [{"role": "user", "content": "z" * 500} for _ in range(10)]
+        compressed, changed = compress_messages(
+            CapturingClient(), messages, max_tokens=80, chars_per_token=4, keep_last=2, threshold=0.1
+        )
+        self.assertTrue(changed)
+        self.assertLessEqual(len(captured["prompt"]), 80 * 4)
+
+
 if __name__ == "__main__":
     unittest.main()
