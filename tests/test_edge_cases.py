@@ -129,6 +129,9 @@ class TestEdgeCases(unittest.TestCase):
             append_code(path, "new\n", atomic=True)
             self.assertEqual(path.read_text(encoding="utf-8"), "old\nnew\n")
 
+    def test_extract_code_handles_unclosed_fence(self):
+        self.assertEqual(extract_code("```python\nprint(1)"), "print(1)\n")
+
     def test_compress_summary_overflow_keeps_recent(self):
         from filament.context_compress import compress_messages
 

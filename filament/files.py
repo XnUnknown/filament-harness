@@ -15,8 +15,19 @@ def extract_code(text: str) -> str:
     if matches:
         code = matches[0].group(1).rstrip()
     else:
-        # Also support a bare fence without a language/newline-ish odd cases.
-        code = text.strip()
+        # Handle malformed output where a fenced block was opened but not closed
+        # (or where text contains a single fence line). Take everything after
+        # the first fence opener and strip a trailing fence if one exists.
+        stripped = text.strip()
+        fence_match = re.search(r"```[A-Za-z0-9_+-]*\r?\n", stripped)
+        if fence_match is not None:
+            code = stripped[fence_match.end():]
+            closing = code.rfind("```")
+            if closing != -1:
+                code = code[:closing]
+            code = code.rstrip()
+        else:
+            code = stripped
     if not code:
         raise ValueError("no code could be extracted")
     return code + "\n"
