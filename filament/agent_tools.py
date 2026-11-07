@@ -13,6 +13,21 @@ class Toolbox:
         self.root = Path(cwd).resolve()
         self.config = config
 
+    def _offload_shell_output(self, output: str) -> str | None:
+        if not bool(getattr(self.config, "offload_shell_output", True)):
+            return None
+        try:
+            import uuid
+            from pathlib import Path
+
+            directory = self.root / ".filament" / "runs"
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / ("shell-" + uuid.uuid4().hex[:12] + ".log")
+            path.write_text(output, encoding="utf-8", errors="replace")
+            return str(path.relative_to(self.root))
+        except (OSError, ValueError):
+            return None
+
     def _safe(self, path: str | Path) -> Path:
         if "\x00" in str(path):
             raise ValueError("path contains a null byte")
@@ -123,12 +138,18 @@ class Toolbox:
                 )
             output = (completed.stdout or "") + (completed.stderr or "")
             if len(output) > self.config.max_shell_output:
+                saved_path = self._offload_shell_output(output)
                 output = _truncate(output, self.config.max_shell_output)
+                if saved_path:
+                    output = output + "\\n[full output saved: " + saved_path + "]"
             return "exit_code: " + str(completed.returncode) + chr(10) + output
         except subprocess.TimeoutExpired as exc:
-            partial = (exc.stdout or "") + (exc.stderr or "")
+            partial = str(exc.stdout or "") + str(exc.stderr or "")
             if len(partial) > self.config.max_shell_output:
+                saved_path = self._offload_shell_output(partial)
                 partial = _truncate(partial, self.config.max_shell_output)
+                if saved_path is not None:
+                    partial = partial + "\\n[full output saved: " + saved_path + "]"
             return "exit_code: timeout" + chr(10) + partial
         except (OSError, ValueError) as exc:
             return "exit_code: error" + chr(10) + str(exc)

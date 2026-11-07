@@ -78,6 +78,7 @@ Important settings:
 - `allow_outside_target`: allow writing outside working root
 - `atomic_writes`: write complete files via temp file and atomic replace when enabled
 - `use_shell`: use shell mode for `run_shell`
+- `offload_shell_output`: save oversized `run_shell` output under `.filament/runs` and return its path
 - `command_allowlist`: optional command prefixes
 - `[llm]`: `kind`, `model`, `base_url`
 

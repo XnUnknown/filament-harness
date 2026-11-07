@@ -57,6 +57,7 @@ class HarnessConfig:
     allow_outside_target: bool = False
     atomic_writes: bool = True
     use_shell: bool = True
+    offload_shell_output: bool = True
     command_allowlist: list[str] = field(default_factory=list)
     llm: LLMConfig = field(default_factory=LLMConfig)
 
@@ -77,6 +78,8 @@ class HarnessConfig:
             raise ValueError("max_shell_output must be at least 256")
         if not isinstance(self.command_allowlist, list):
             raise ValueError("command_allowlist must be a list")
+        if not isinstance(self.offload_shell_output, bool):
+            raise ValueError("offload_shell_output must be a boolean")
         for prefix in self.command_allowlist:
             if not isinstance(prefix, str) or not prefix.strip():
                 raise ValueError("command_allowlist entries must be non-empty strings")

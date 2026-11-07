@@ -77,6 +77,7 @@ def _dump_config(path: Path, config: HarnessConfig) -> None:
         f"allow_outside_target = {str(config.allow_outside_target).lower()}",
         f"atomic_writes = {str(config.atomic_writes).lower()}",
         f"use_shell = {str(config.use_shell).lower()}",
+        f"offload_shell_output = {str(config.offload_shell_output).lower()}",
         f"command_allowlist = {allow}",
         "",
         "[llm]",
@@ -248,6 +249,7 @@ class TUIApp:
         self.config.timeout_shell = _prompt_int("Shell timeout seconds", self.config.timeout_shell, 1)
         self.config.max_shell_output = _prompt_int("Max shell output chars", self.config.max_shell_output, 256)
         self.config.use_shell = _prompt_bool("Use shell mode", self.config.use_shell)
+        self.config.offload_shell_output = _prompt_bool("Offload large shell output to .filament/runs", self.config.offload_shell_output)
         self.config.allow_outside_target = _prompt_bool("Allow targets outside working root", self.config.allow_outside_target)
         self.allow_outside_target = self.config.allow_outside_target
         allowlist = _prompt("Command allowlist (comma separated, blank for none)", ", ".join(self.config.command_allowlist))

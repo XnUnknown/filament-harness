@@ -162,5 +162,29 @@ class TestEdgeCases(unittest.TestCase):
         self.assertLessEqual(len(captured["prompt"]), 80 * 4)
 
 
+    def test_extract_code_handles_arbitrary_fence_language(self):
+        self.assertEqual(extract_code("```c#\nConsole.WriteLine(1);\n```"), "Console.WriteLine(1);\n")
+
+    def test_shell_output_offload(self):
+        import os
+        import tempfile
+
+        from filament.agent_tools import Toolbox
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = HarnessConfig(max_shell_output=10, offload_shell_output=True)
+            tools = Toolbox(d, cfg)
+            result = tools.run_shell('python -c "print(chr(88) * 500)"')
+            self.assertIn("full output saved", result)
+            runs = os.path.join(d, ".filament", "runs")
+            self.assertTrue(os.path.isdir(runs))
+            self.assertEqual(1, len(os.listdir(runs)))
+            # disabled
+            cfg2 = HarnessConfig(max_shell_output=100, offload_shell_output=False)
+            tools2 = Toolbox(d, cfg2)
+            result2 = tools2.run_shell('python -c "print(chr(89) * 500)"')
+            self.assertNotIn("full output saved", result2)
+            self.assertIn("truncated", result2)
+
 if __name__ == "__main__":
     unittest.main()

@@ -70,9 +70,14 @@ class Toolset:
                     errors="replace",
                 )
         except subprocess.TimeoutExpired as exc:
-            partial = (exc.stdout or "") + (exc.stderr or "")
-            text = _truncate(partial, self.config.max_shell_output)
-            result = f"exit_code: timeout\n{text}"
+            partial = str(exc.stdout or "") + str(exc.stderr or "")
+            saved_path = None
+            if len(partial) > self.config.max_shell_output:
+                saved_path = self._offload_shell_output(partial)
+                partial = _truncate(partial, self.config.max_shell_output)
+            result = f"exit_code: timeout\n{partial}"
+            if saved_path is not None:
+                result += f"\n[full output saved: {saved_path}]"
             self.budget.add(f"shell:{command}\n{result}")
             return result
         except (OSError, ValueError) as exc:
@@ -81,10 +86,32 @@ class Toolset:
             return result
 
         output = (proc.stdout or "") + (proc.stderr or "")
-        output = _truncate(output, self.config.max_shell_output)
+        saved_path = None
+        if len(output) > self.config.max_shell_output:
+            saved_path = self._offload_shell_output(output)
+            output = _truncate(output, self.config.max_shell_output)
         result = f"exit_code: {proc.returncode}\n{output}"
+        if saved_path is not None:
+            result += f"\n[full output saved: {saved_path}]"
         self.budget.add(f"shell:{command}\n{result}")
         return result
+
+
+    def _offload_shell_output(self, output: str) -> str | None:
+        if not bool(getattr(self.config, "offload_shell_output", True)):
+            return None
+        try:
+            import uuid
+            from pathlib import Path
+
+            root = Path(self.shell_cwd).expanduser().resolve()
+            directory = root / ".filament" / "runs"
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / ("shell-" + uuid.uuid4().hex[:12] + ".log")
+            path.write_text(output, encoding="utf-8", errors="replace")
+            return str(path.relative_to(root))
+        except (OSError, ValueError):
+            return None
 
     def spawn_agent(self, task: str, system: str | None = None) -> str:
         task = task.strip()
@@ -94,11 +121,12 @@ class Toolset:
             raise ValueError("task is too long")
         prompt = task
         reserve = max(512, self.budget.max_tokens // 20)
-        if self.budget.total_tokens() + self.budget.estimate(prompt) + reserve > self.budget.max_tokens:
-            raise RuntimeError("context budget exceeded before spawn")
-        added_prompt = self.budget.add(f"spawn:{prompt}")
-        if not added_prompt:
-            raise RuntimeError("context budget exceeded before spawn")
+        with self.budget._lock:
+            if self.budget.total_tokens() + self.budget.estimate(prompt) + reserve > self.budget.max_tokens:
+                raise RuntimeError("context budget exceeded before spawn")
+            added_prompt = self.budget.add(f"spawn:{prompt}")
+            if not added_prompt:
+                raise RuntimeError("context budget exceeded before spawn")
         result = self.client.generate(prompt, system=system or CODING_SYSTEM)
         self.budget.add(f"result:{result}")
         return result

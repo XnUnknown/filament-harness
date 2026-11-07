@@ -56,6 +56,7 @@ def _config_to_dict(config: HarnessConfig) -> dict[str, Any]:
         "allow_outside_target": config.allow_outside_target,
         "atomic_writes": config.atomic_writes,
         "use_shell": config.use_shell,
+        "offload_shell_output": config.offload_shell_output,
         "command_allowlist": config.command_allowlist,
         "llm": {
             "kind": config.llm.kind,
@@ -82,7 +83,7 @@ def _apply_config(config: HarnessConfig, updates: dict[str, Any]) -> HarnessConf
 
 def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "ping":
-        return {"version": "0.4.8", "workspace": str(STATE["workspace"] or Path.cwd())}
+        return {"version": "0.4.9", "workspace": str(STATE["workspace"] or Path.cwd())}
     if method == "get_config":
         if STATE["config"] is None:
             _load_workspace(str(Path.cwd()))
