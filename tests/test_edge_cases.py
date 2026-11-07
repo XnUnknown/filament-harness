@@ -186,5 +186,14 @@ class TestEdgeCases(unittest.TestCase):
             self.assertNotIn("full output saved", result2)
             self.assertIn("truncated", result2)
 
+    def test_shell_output_offload_annotation_newline(self):
+        with tempfile.TemporaryDirectory() as d:
+            from filament.agent_tools import Toolbox
+            cfg = HarnessConfig(max_shell_output=10, offload_shell_output=True)
+            tools = Toolbox(d, cfg)
+            result = tools.run_shell('python -c "print(chr(88) * 500)"')
+            self.assertIn(chr(10) + "[full output saved: ", result)
+
+
 if __name__ == "__main__":
     unittest.main()

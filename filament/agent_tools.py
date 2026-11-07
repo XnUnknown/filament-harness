@@ -141,7 +141,7 @@ class Toolbox:
                 saved_path = self._offload_shell_output(output)
                 output = _truncate(output, self.config.max_shell_output)
                 if saved_path:
-                    output = output + "\\n[full output saved: " + saved_path + "]"
+                    output = output + "\n[full output saved: " + saved_path + "]"
             return "exit_code: " + str(completed.returncode) + chr(10) + output
         except subprocess.TimeoutExpired as exc:
             partial = str(exc.stdout or "") + str(exc.stderr or "")
@@ -149,7 +149,7 @@ class Toolbox:
                 saved_path = self._offload_shell_output(partial)
                 partial = _truncate(partial, self.config.max_shell_output)
                 if saved_path is not None:
-                    partial = partial + "\\n[full output saved: " + saved_path + "]"
+                    partial = partial + "\n[full output saved: " + saved_path + "]"
             return "exit_code: timeout" + chr(10) + partial
         except (OSError, ValueError) as exc:
             return "exit_code: error" + chr(10) + str(exc)
