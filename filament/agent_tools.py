@@ -112,6 +112,10 @@ class Toolbox:
             if any(ch in command for ch in ("\n", "\r", ";", "|", "&", "`", "$", "<", ">", "(", ")", "{", "}")):
                 raise ValueError("command contains shell metacharacters not permitted with an allowlist")
 
+        if chr(0) in command:
+            raise ValueError("command contains a null byte")
+        if any(ord(ch) < 32 and ch not in '\t\n\r' for ch in command) or chr(127) in command:
+            raise ValueError("command contains a control character")
         timeout = timeout or self.config.timeout_shell
         use_shell = self.config.use_shell
         try:
