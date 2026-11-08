@@ -124,7 +124,11 @@ class Orchestrator:
 
         appended_counts: dict[str, int] = {}
         for _, target_path, code in extracted:
-            append_code(target_path, code, atomic=self.config.atomic_writes)
+            try:
+                append_code(target_path, code, atomic=self.config.atomic_writes)
+            except (OSError, ValueError) as exc:
+                errors.append(f"append failed for {target_path}: {exc}")
+                continue
             appended_counts[str(target_path)] = appended_counts.get(str(target_path), 0) + 1
 
         main_target = ensure_target_within_root(

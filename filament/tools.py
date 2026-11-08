@@ -126,7 +126,7 @@ class Toolset:
         prompt = task
         reserve = max(512, self.budget.max_tokens // 20)
         with self.budget._lock:
-            if self.budget.total_tokens() + self.budget.estimate(prompt) + reserve > self.budget.max_tokens:
+            if self.budget.total_tokens() + self.budget.estimate(f"spawn:{prompt}") + reserve > self.budget.max_tokens:
                 raise RuntimeError("context budget exceeded before spawn")
             added_prompt = self.budget.add(f"spawn:{prompt}")
             if not added_prompt:

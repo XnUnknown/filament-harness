@@ -5,6 +5,7 @@ environment as the harness itself.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -65,7 +66,6 @@ def _prompt_choice(text: str, choices: list[str], default: str) -> str:
 
 def _dump_config(path: Path, config: HarnessConfig) -> None:
     llm = config.llm
-    allow = "[" + ", ".join(repr(item) for item in config.command_allowlist) + "]"
     lines = [
         f"max_tokens = {config.max_tokens}",
         f"chars_per_token = {config.chars_per_token}",
@@ -78,17 +78,17 @@ def _dump_config(path: Path, config: HarnessConfig) -> None:
         f"atomic_writes = {str(config.atomic_writes).lower()}",
         f"use_shell = {str(config.use_shell).lower()}",
         f"offload_shell_output = {str(config.offload_shell_output).lower()}",
-        f"command_allowlist = {allow}",
+        f"command_allowlist = {json.dumps(config.command_allowlist)}",
         "",
         "[llm]",
-        f'kind = "{llm.kind}"',
-        f'model = "{llm.model}"',
-        f'base_url = {repr(llm.base_url or "")}',
-        f'api_key = {repr(llm.api_key or "")}',
+        f"kind = {json.dumps(llm.kind)}",
+        f"model = {json.dumps(llm.model)}",
+        f"base_url = {json.dumps(llm.base_url or '')}",
+        f"api_key = {json.dumps(llm.api_key or '')}",
         f"timeout = {llm.timeout}",
     ]
     if llm.reasoning_effort:
-        lines.insert(-1, f'reasoning_effort = "{llm.reasoning_effort}"')
+        lines.insert(-1, f"reasoning_effort = {json.dumps(llm.reasoning_effort)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
