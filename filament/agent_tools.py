@@ -34,6 +34,8 @@ class Toolbox:
         if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(path)):
             raise ValueError("path contains a control character")
         candidate = Path(path).expanduser()
+        if candidate.drive and not candidate.root:
+            raise ValueError("path contains a drive-relative component")
         if not candidate.is_absolute():
             candidate = self.root / candidate
         resolved = candidate.resolve()

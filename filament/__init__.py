@@ -1,2 +1,2 @@
 """Filament harness package."""
-__version__ = "0.4.10"
+__version__ = "0.4.12"

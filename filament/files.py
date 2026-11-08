@@ -122,6 +122,8 @@ def ensure_target_within_root(target: str | Path, root: str | Path, allow_outsid
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(target) + str(root)):
         raise ValueError("path contains a control character")
     target_path = Path(target).expanduser()
+    if target_path.drive and not target_path.root:
+        raise ValueError("path contains a drive-relative component")
     if not target_path.is_absolute():
         target_path = Path(root).expanduser() / target_path
     target_path = target_path.resolve()
