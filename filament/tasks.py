@@ -28,7 +28,7 @@ def _coerce_task(raw: Any, index: int, parent: str = "", inherited_target: str |
     if target in (None, ""):
         target = inherited_target
     else:
-        target = str(target).strip()
+        target = str(target).strip() or inherited_target
     enabled = bool(raw.get("enabled", True))
     children = []
     for child_index, child in enumerate(raw.get("subtasks", []) or []):

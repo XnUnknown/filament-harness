@@ -98,6 +98,10 @@ def replace_line(path: str | Path, line_no: int, new_text: str) -> None:
             f.flush()
             os.fsync(f.fileno())
         if p.exists():
+            try:
+                os.chmod(temp_name, p.stat().st_mode)
+            except OSError:
+                pass
             os.replace(p, backup)
         os.replace(Path(temp_name), p)
         try:

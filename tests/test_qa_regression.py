@@ -34,5 +34,22 @@ class TestQARegressions(unittest.TestCase):
             _safe_session_id("session:evil")
 
 
+    def test_task_whitespace_target_inherits_parent_target(self):
+        from filament.tasks import flatten_tasks, parse_tasks
+
+        tasks = parse_tasks(
+            [
+                {
+                    "id": "parent",
+                    "task": "parent work",
+                    "target": "parent.py",
+                    "subtasks": [{"id": "child", "task": "child work", "target": "   "}],
+                }
+            ]
+        )
+        flat = flatten_tasks(tasks)
+        self.assertEqual(len(flat), 1)
+        self.assertEqual(flat[0].target, "parent.py")
+
 if __name__ == "__main__":
     unittest.main()
