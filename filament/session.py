@@ -20,6 +20,8 @@ def _safe_session_id(session_id: Any) -> str:
         raise ValueError("session_id must not contain path separators or null bytes")
     if any(ord(char) < 32 or ord(char) == 127 for char in candidate):
         raise ValueError("session_id must not contain control characters")
+    if ":" in candidate:
+        raise ValueError("session_id must not contain a colon")
     if candidate != Path(candidate).name:
         raise ValueError("session_id must be a base file name")
     return candidate

@@ -40,6 +40,8 @@ def append_code(path: str | Path, code: str, atomic: bool = False) -> None:
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(path)):
         raise ValueError("path contains a control character")
     p = Path(path)
+    if p.drive and not p.root:
+        raise ValueError("path contains a drive-relative component")
     p.parent.mkdir(parents=True, exist_ok=True)
     normalized = code if code.endswith("\n") else code + "\n"
 
@@ -78,6 +80,8 @@ def replace_line(path: str | Path, line_no: int, new_text: str) -> None:
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in str(path)):
         raise ValueError("path contains a control character")
     p = Path(path)
+    if p.drive and not p.root:
+        raise ValueError("path contains a drive-relative component")
     raw = p.read_text(encoding="utf-8")
     lines = raw.splitlines(keepends=True)
     if line_no < 1 or line_no > len(lines):
