@@ -43,5 +43,23 @@ class TestShellCommandValidation(unittest.TestCase):
             self.assertIn("exit_code: 0", result)
 
 
+    def test_toolset_rejects_non_directory_cwd(self):
+        with tempfile.TemporaryDirectory() as d:
+            file_cwd = Path(d) / "notdir"
+            file_cwd.write_text("x", encoding="utf-8")
+            cfg = HarnessConfig()
+            toolset = Toolset(client=MockLLM(), budget=ContextBudget(), config=cfg, shell_cwd=str(file_cwd))
+            with self.assertRaises(ValueError):
+                toolset.run_shell("echo hi")
+
+    def test_toolbox_rejects_non_directory_cwd(self):
+        with tempfile.TemporaryDirectory() as d:
+            file_cwd = Path(d) / "notdir"
+            file_cwd.write_text("x", encoding="utf-8")
+            tools = Toolbox(file_cwd, HarnessConfig())
+            with self.assertRaises(ValueError):
+                tools.run_shell("echo hi")
+
+
 if __name__ == "__main__":
     unittest.main()

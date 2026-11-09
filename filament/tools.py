@@ -43,7 +43,7 @@ class Toolset:
         from pathlib import Path
 
         cwd_path = Path(self.shell_cwd).expanduser()
-        if not cwd_path.exists():
+        if not cwd_path.exists() or not cwd_path.is_dir():
             raise ValueError(f"shell working directory does not exist: {cwd_path}")
         cwd_path = cwd_path.resolve()
         if chr(0) in command:
