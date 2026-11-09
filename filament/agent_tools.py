@@ -103,6 +103,8 @@ class Toolbox:
         return "\n".join(lines) if lines else "(empty)"
 
     def run_shell(self, command: str, timeout: int | None = None) -> str:
+        if not self.root.exists() or not self.root.is_dir():
+            raise ValueError(f"shell working directory does not exist: {self.root}")
         if not command or not command.strip():
             raise ValueError("command must not be empty")
         if len(command) > 20_000:
