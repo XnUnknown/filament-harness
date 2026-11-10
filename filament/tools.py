@@ -7,7 +7,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
-from .config import HarnessConfig
+from .config import HarnessConfig, coerce_timeout
 from .context import ContextBudget
 from .llm import LLMClient
 
@@ -50,7 +50,7 @@ class Toolset:
             raise ValueError("command contains a null byte")
         if any(ord(ch) < 32 and ch not in '\t\n\r' for ch in command) or chr(127) in command:
             raise ValueError("command contains a control character")
-        timeout = timeout or self.config.timeout_shell
+        resolved_timeout = coerce_timeout(timeout, self.config.timeout_shell)
 
         use_shell = self.config.use_shell
         try:
@@ -61,7 +61,7 @@ class Toolset:
                     cwd=str(cwd_path),
                     capture_output=True,
                     text=True,
-                    timeout=timeout,
+                    timeout=resolved_timeout,
                     errors="replace",
                 )
             else:
@@ -70,7 +70,7 @@ class Toolset:
                     cwd=str(cwd_path),
                     capture_output=True,
                     text=True,
-                    timeout=timeout,
+                    timeout=resolved_timeout,
                     errors="replace",
                 )
         except subprocess.TimeoutExpired as exc:

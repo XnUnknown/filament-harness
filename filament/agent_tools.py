@@ -5,7 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from .config import HarnessConfig
+from .config import DEFAULT_READ_MAX_CHARS, HarnessConfig, coerce_char_limit, coerce_timeout
 
 
 class Toolbox:
@@ -43,15 +43,16 @@ class Toolbox:
             raise ValueError(f"path escapes working directory: {resolved}")
         return resolved
 
-    def read_file(self, path: str | Path, max_chars: int = 12000) -> str:
+    def read_file(self, path: str | Path, max_chars: int = DEFAULT_READ_MAX_CHARS) -> str:
         target = self._safe(path)
+        limit = coerce_char_limit(max_chars)
         if not target.exists():
             raise FileNotFoundError(str(target))
         if target.is_dir():
             raise ValueError(f"not a file: {target}")
         text = target.read_text(encoding="utf-8", errors="replace")
-        if len(text) > max_chars:
-            return text[:max_chars] + f"\n... [truncated {len(text) - max_chars} chars]"
+        if len(text) > limit:
+            return text[:limit] + f"\n... [truncated {len(text) - limit} chars]"
         return text
 
     def write_file(self, path: str | Path, content: str, append: bool = False) -> str:
@@ -120,7 +121,7 @@ class Toolbox:
             raise ValueError("command contains a null byte")
         if any(ord(ch) < 32 and ch not in '\t\n\r' for ch in command) or chr(127) in command:
             raise ValueError("command contains a control character")
-        timeout = timeout or self.config.timeout_shell
+        resolved_timeout = coerce_timeout(timeout, self.config.timeout_shell)
         use_shell = self.config.use_shell
         try:
             if use_shell:
@@ -130,7 +131,7 @@ class Toolbox:
                     cwd=str(self.root),
                     capture_output=True,
                     text=True,
-                    timeout=timeout,
+                    timeout=resolved_timeout,
                     errors="replace",
                 )
             else:
@@ -141,7 +142,7 @@ class Toolbox:
                     cwd=str(self.root),
                     capture_output=True,
                     text=True,
-                    timeout=timeout,
+                    timeout=resolved_timeout,
                     errors="replace",
                 )
             output = (completed.stdout or "") + (completed.stderr or "")
@@ -175,7 +176,7 @@ class Toolbox:
     def call(self, tool: str, args: dict | None = None) -> str:
         args = args or {}
         if tool == "read_file":
-            return self.read_file(args.get("path", ""), int(args.get("max_chars", 12000)))
+            return self.read_file(args.get("path", ""), args.get("max_chars", DEFAULT_READ_MAX_CHARS))
         if tool == "write_file":
             return self.write_file(args.get("path", ""), str(args.get("content", "")), bool(args.get("append", False)))
         if tool == "list_dir":

@@ -146,7 +146,7 @@ def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "read_file":
         if STATE["chat"] is None:
             _load_workspace(str(Path.cwd()))
-        return {"content": STATE["chat"].toolbox.read_file(str(params.get("path", "")), int(params.get("max_chars", 12000)))}
+        return {"content": STATE["chat"].toolbox.read_file(str(params.get("path", "")), params.get("max_chars", 12000))}
     if method == "compress_context":
         if STATE["chat"] is None:
             _load_workspace(str(Path.cwd()))

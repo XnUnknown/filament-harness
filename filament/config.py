@@ -91,6 +91,42 @@ class HarnessConfig:
         return int(self.max_tokens * (1.0 - self.budget_margin))
 
 
+MAX_SHELL_TIMEOUT_SECONDS = 86_400
+DEFAULT_READ_MAX_CHARS = 12_000
+
+
+def coerce_timeout(value: Any, default: float) -> float:
+    """Validate a shell timeout coming from config or untrusted tool arguments."""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"timeout must be a number of seconds, got {type(value).__name__}")
+    if value <= 0:
+        raise ValueError("timeout must be positive")
+    if value > MAX_SHELL_TIMEOUT_SECONDS:
+        raise ValueError(f"timeout must not exceed {MAX_SHELL_TIMEOUT_SECONDS} seconds")
+    return float(value)
+
+
+def coerce_char_limit(value: Any, default: int = DEFAULT_READ_MAX_CHARS) -> int:
+    """Validate a character cap coming from untrusted tool arguments."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError("max_chars must be an integer")
+    if isinstance(value, str):
+        try:
+            value = int(value.strip())
+        except ValueError:
+            raise ValueError(f"max_chars must be an integer, got {value!r}") from None
+    if not isinstance(value, int):
+        raise ValueError(f"max_chars must be an integer, got {type(value).__name__}")
+    if value < 1:
+        raise ValueError("max_chars must be positive")
+    return value
+
+
+
 def _read_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as f:
         return tomllib.load(f)

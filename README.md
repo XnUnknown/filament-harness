@@ -40,6 +40,7 @@ Example task file:
 - Context budget: enforced near 120k tokens (approx., 4 chars/token) with safety margin.
 - Writes: append batch after all agents finish; fixes apply by exact line number.
 - Security: target paths must stay inside the working root unless explicitly allowed.
+- Tool arguments: `run_shell` accepts only positive timeouts (default `timeout_shell`, capped at 86400s) and `read_file` only positive `max_chars`; invalid values raise `ValueError` before reaching `subprocess` or slicing.
 
 ## Providers
 
