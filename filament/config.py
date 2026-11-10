@@ -27,8 +27,14 @@ class LLMConfig:
             raise ValueError("llm model must not be empty")
         if self.base_url and not self.base_url.startswith(("http://", "https://")):
             raise ValueError("llm base_url must be http(s)")
-        if self.timeout < 1:
-            raise ValueError("llm timeout must be positive")
+        if self.timeout is None:
+            self.timeout = 120
+        timeout = coerce_timeout(self.timeout, 120, "llm timeout")
+        if timeout < 1:
+            raise ValueError("llm timeout must be at least 1 second")
+        if timeout != int(timeout):
+            raise ValueError("llm timeout must be a whole number of seconds")
+        self.timeout = int(timeout)
         if self.reasoning_effort is not None and self.reasoning_effort not in {"low", "medium", "high"}:
             raise ValueError("reasoning_effort must be low, medium, high, or unset")
         if self.kind in {"openai", "anthropic", "ollama"}:
@@ -95,16 +101,16 @@ MAX_SHELL_TIMEOUT_SECONDS = 86_400
 DEFAULT_READ_MAX_CHARS = 12_000
 
 
-def coerce_timeout(value: Any, default: float) -> float:
-    """Validate a shell timeout coming from config or untrusted tool arguments."""
+def coerce_timeout(value: Any, default: float, label: str = "timeout") -> float:
+    """Validate a timeout in seconds coming from config or untrusted arguments."""
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"timeout must be a number of seconds, got {type(value).__name__}")
+        raise ValueError(f"{label} must be a number of seconds, got {type(value).__name__}")
     if value <= 0:
-        raise ValueError("timeout must be positive")
+        raise ValueError(f"{label} must be positive")
     if value > MAX_SHELL_TIMEOUT_SECONDS:
-        raise ValueError(f"timeout must not exceed {MAX_SHELL_TIMEOUT_SECONDS} seconds")
+        raise ValueError(f"{label} must not exceed {MAX_SHELL_TIMEOUT_SECONDS} seconds")
     return float(value)
 
 

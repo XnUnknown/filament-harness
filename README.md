@@ -41,6 +41,7 @@ Example task file:
 - Writes: append batch after all agents finish; fixes apply by exact line number.
 - Security: target paths must stay inside the working root unless explicitly allowed.
 - Tool arguments: `run_shell` accepts only positive timeouts (default `timeout_shell`, capped at 86400s) and `read_file` only positive `max_chars`; invalid values raise `ValueError` before reaching `subprocess` or slicing.
+- Provider transport: HTTP response bodies are capped at 8 MiB (`MAX_RESPONSE_BYTES`) and provider error text at 64 KiB; larger bodies raise `RuntimeError` before JSON decoding. `[llm].timeout` must be a whole number of seconds between 1 and 86400.
 
 ## Providers
 
@@ -81,10 +82,10 @@ Important settings:
 - `use_shell`: use shell mode for `run_shell`
 - `offload_shell_output`: save oversized `run_shell` output under `.filament/runs` and return its path
 - `command_allowlist`: optional command prefixes
-- `[llm]`: `kind`, `model`, `base_url`
+- `[llm]`: `kind`, `model`, `base_url`, `timeout` (seconds, default 120)
 
 Environment overrides: `FILAMENT_CLIENT`, `FILAMENT_MODEL`, `FILAMENT_OLLAMA_URL`,
-`FILAMENT_MAX_TOKENS`, `FILAMENT_WORKERS`, `FILAMENT_TIMEOUT_SHELL`, `FILAMENT_USE_OLLAMA`.
+`FILAMENT_MAX_TOKENS`, `FILAMENT_WORKERS`, `FILAMENT_TIMEOUT_SHELL`, `FILAMENT_TIMEOUT`, `FILAMENT_USE_OLLAMA`.
 
 ## Testing
 

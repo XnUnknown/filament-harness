@@ -14,6 +14,49 @@ class LLMClient(Protocol):
     def generate(self, prompt: str, system: str | None = None) -> str: ...
 
 
+# A completion is small; anything near these caps means a misbehaving or hostile
+# endpoint. Bounding the read keeps one bad request from exhausting the harness.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_ERROR_BODY_BYTES = 64 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+def _read_body(resp: Any, provider: str, limit: int = MAX_RESPONSE_BYTES) -> bytes:
+    """Read at most ``limit`` bytes from a provider response."""
+    headers = getattr(resp, "headers", None)
+    declared = headers.get("Content-Length") if headers is not None else None
+    if declared is not None:
+        try:
+            declared_size = int(str(declared).strip())
+        except (TypeError, ValueError):
+            declared_size = None
+        if declared_size is not None and declared_size > limit:
+            raise RuntimeError(
+                f"{provider} response exceeded {limit} bytes (Content-Length: {declared_size})"
+            )
+    body = bytearray()
+    while len(body) <= limit:
+        chunk = resp.read(min(_READ_CHUNK_BYTES, limit + 1 - len(body)))
+        if not chunk:
+            break
+        body.extend(chunk)
+    if len(body) > limit:
+        raise RuntimeError(f"{provider} response exceeded {limit} bytes")
+    return bytes(body)
+
+
+def _read_error_body(exc: urllib.error.HTTPError, limit: int = MAX_ERROR_BODY_BYTES) -> str:
+    """Read a bounded prefix of an HTTP error body for diagnostics."""
+    try:
+        raw = exc.read(limit + 1)
+    except (OSError, ValueError):
+        return ""
+    text = raw[:limit].decode(errors="replace")
+    if len(raw) > limit:
+        text += " [truncated]"
+    return text
+
+
 class MockLLM:
     """Deterministic client for tests/offline runs."""
 
@@ -59,9 +102,9 @@ class OllamaClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode())
+                data = json.loads(_read_body(resp, "ollama").decode())
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
+            body = _read_error_body(exc)
             raise RuntimeError(f"ollama request failed: HTTP {exc.code}: {body}") from exc
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise RuntimeError(f"ollama request failed: {exc}") from exc
@@ -99,9 +142,9 @@ class OpenAICompatibleClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode())
+                data = json.loads(_read_body(resp, "openai-compatible").decode())
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
+            body = _read_error_body(exc)
             raise RuntimeError(f"openai-compatible request failed: HTTP {exc.code}: {body}") from exc
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise RuntimeError(f"openai-compatible request failed: {exc}") from exc
@@ -150,9 +193,9 @@ class AnthropicClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode())
+                data = json.loads(_read_body(resp, "anthropic").decode())
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
+            body = _read_error_body(exc)
             raise RuntimeError(f"anthropic request failed: HTTP {exc.code}: {body}") from exc
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise RuntimeError(f"anthropic request failed: {exc}") from exc
@@ -194,12 +237,17 @@ def _is_local_url(url: str | None) -> bool:
 
 
 def build_client(llm_config: Any) -> LLMClient:
+    # config imports this module for _is_local_url; import lazily to avoid a cycle.
+    from .config import coerce_timeout
+
     kind = getattr(llm_config, "kind", None) or "auto"
     kind = kind.lower().strip()
     model = getattr(llm_config, "model", None) or "llama3.2"
     base_url = getattr(llm_config, "base_url", None)
     api_key = getattr(llm_config, "api_key", None)
-    timeout = getattr(llm_config, "timeout", 120) or 120
+    timeout = coerce_timeout(getattr(llm_config, "timeout", None), 120, "llm timeout")
+    if timeout < 1:
+        raise ValueError("llm timeout must be at least 1 second")
     reasoning_effort = getattr(llm_config, "reasoning_effort", None)
     use_ollama_env = bool(getattr(llm_config, "use_ollama_env", False))
 
