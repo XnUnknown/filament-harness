@@ -1,12 +1,14 @@
 """Newline-delimited JSON backend used by the Filament Electron app."""
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
-from .config import HarnessConfig, load_config
+from . import __version__
+from .config import LLMConfig, HarnessConfig, load_config
 from .chat import ChatOrchestrator
 from .session import create_session
 
@@ -14,6 +16,25 @@ STATE: dict[str, Any] = {
     "workspace": None,
     "config": None,
     "chat": None,
+}
+
+# One request per line. Cap the frame so a runaway client cannot exhaust memory.
+MAX_REQUEST_LINE_BYTES = 1_048_576
+
+_INT_KEYS = {
+    "max_tokens",
+    "chars_per_token",
+    "workers",
+    "max_tasks",
+    "timeout_shell",
+    "max_shell_output",
+}
+_FLOAT_KEYS = {"budget_margin"}
+_BOOL_KEYS = {
+    "allow_outside_target",
+    "atomic_writes",
+    "use_shell",
+    "offload_shell_output",
 }
 
 
@@ -69,21 +90,69 @@ def _config_to_dict(config: HarnessConfig) -> dict[str, Any]:
     }
 
 
-def _apply_config(config: HarnessConfig, updates: dict[str, Any]) -> HarnessConfig:
+def _coerce_config_value(key: str, value: Any) -> Any:
+    """Reject wrong JSON types before they reach arithmetic or truthiness checks."""
+    if key in _INT_KEYS:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} must be an integer")
+        return value
+    if key in _FLOAT_KEYS:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} must be a number")
+        return value
+    if key in _BOOL_KEYS:
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} must be a boolean")
+        return value
+    if key == "command_allowlist":
+        if not isinstance(value, list) or not all(isinstance(prefix, str) for prefix in value):
+            raise ValueError("command_allowlist must be a list of strings")
+        return list(value)
+    return value
+
+
+def _coerce_llm_value(key: str, value: Any) -> Any:
+    if key == "timeout":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("llm.timeout must be an integer number of seconds")
+        return value
+    if key == "use_ollama_env":
+        if not isinstance(value, bool):
+            raise ValueError("llm.use_ollama_env must be a boolean")
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"llm.{key} must be a string")
+    return value
+
+
+def _apply_config(config: HarnessConfig, updates: Any) -> HarnessConfig:
+    """Return a validated copy; the caller's config is never mutated on failure."""
+    if not isinstance(updates, dict):
+        raise ValueError("config must be an object")
+    candidate = copy.deepcopy(config)
     for key, value in updates.items():
-        if key == "llm" and isinstance(value, dict):
+        if value is None:
+            continue
+        if key == "llm":
+            if not isinstance(value, dict):
+                raise ValueError("llm must be an object")
             for inner_key, inner_value in value.items():
-                if hasattr(config.llm, inner_key) and inner_value is not None:
-                    setattr(config.llm, inner_key, inner_value)
-        elif hasattr(config, key) and value is not None:
-            setattr(config, key, value)
-    config.validate()
-    return config
+                if inner_key not in LLMConfig.__dataclass_fields__:
+                    raise ValueError(f"unknown llm config key: {inner_key}")
+                if inner_value is None:
+                    continue
+                setattr(candidate.llm, inner_key, _coerce_llm_value(inner_key, inner_value))
+            continue
+        if key not in HarnessConfig.__dataclass_fields__:
+            raise ValueError(f"unknown config key: {key}")
+        setattr(candidate, key, _coerce_config_value(key, value))
+    candidate.validate()
+    return candidate
 
 
 def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "ping":
-        return {"version": "0.4.15", "workspace": str(STATE["workspace"] or Path.cwd())}
+        return {"version": __version__, "workspace": str(STATE["workspace"] or Path.cwd())}
     if method == "get_config":
         if STATE["config"] is None:
             _load_workspace(str(Path.cwd()))
@@ -91,10 +160,16 @@ def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "set_config":
         if STATE["config"] is None:
             _load_workspace(str(Path.cwd()))
-        config = _apply_config(STATE["config"], params.get("config", {}))
+        current = STATE["config"]
+        if not isinstance(current, HarnessConfig):
+            raise ValueError("configuration is not loaded")
+        updates = params.get("config")
+        if updates is None:
+            updates = {}
+        config = _apply_config(current, updates)
         STATE["config"] = config
         if STATE["chat"] is not None:
-            STATE["chat"].config = config
+            STATE["chat"].apply_config(config)
         return _config_to_dict(config)
     if method == "select_workspace":
         return _load_workspace(params.get("path"))
@@ -155,23 +230,74 @@ def handle(method: str, params: dict[str, Any]) -> Any:
     raise ValueError(f"unknown method: {method}")
 
 
+def _encode(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _error_response(request_id: Any, message: str) -> str:
+    try:
+        return _encode({"id": request_id, "ok": False, "error": message})
+    except (TypeError, ValueError):
+        return '{"id": null, "ok": false, "error": "response could not be serialized"}'
+
+
+def respond(line: str) -> str:
+    """Answer one protocol line; a bad request costs one response, not the session."""
+    request_id = None
+    try:
+        request = json.loads(line)
+        if not isinstance(request, dict):
+            raise ValueError("request must be a JSON object")
+        request_id = request.get("id")
+        method = request.get("method")
+        if not isinstance(method, str) or not method:
+            raise ValueError("method must be a non-empty string")
+        params = request.get("params")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            raise ValueError("params must be an object")
+        return _encode({"id": request_id, "ok": True, "result": handle(method, params)})
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(request_id, str(exc))
+
+
+def _write_line(stream: BinaryIO, text: str) -> None:
+    stream.write(text.encode("utf-8", "replace") + b"\n")
+    stream.flush()
+
+
+def _discard_line(stream: BinaryIO) -> None:
+    while True:
+        chunk = stream.readline(MAX_REQUEST_LINE_BYTES + 1)
+        if not chunk or chunk.endswith(b"\n"):
+            return
+
+
 def main() -> None:
-    for line in sys.stdin:
-        line = line.strip()
+    # Byte-level UTF-8 framing: redirected stdio on Windows defaults to the
+    # locale codec, which cannot encode most model output.
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+    while True:
+        raw = stdin.readline(MAX_REQUEST_LINE_BYTES + 1)
+        if not raw:
+            break
+        if len(raw) > MAX_REQUEST_LINE_BYTES and not raw.endswith(b"\n"):
+            _discard_line(stdin)
+            _write_line(
+                stdout,
+                _error_response(None, f"request line exceeds {MAX_REQUEST_LINE_BYTES} bytes"),
+            )
+            continue
+        try:
+            line = raw.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            _write_line(stdout, _error_response(None, "request line is not valid UTF-8"))
+            continue
         if not line:
             continue
-        request_id = None
-        try:
-            request = json.loads(line)
-            request_id = request.get("id")
-            method = request.get("method", "")
-            params = request.get("params", {}) or {}
-            result = handle(method, params)
-            response = {"id": request_id, "ok": True, "result": result}
-        except Exception as exc:  # noqa: BLE001
-            response = {"id": request_id, "ok": False, "error": str(exc)}
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        _write_line(stdout, respond(line))
 
 
 if __name__ == "__main__":

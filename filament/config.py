@@ -132,6 +132,20 @@ def coerce_char_limit(value: Any, default: int = DEFAULT_READ_MAX_CHARS) -> int:
     return value
 
 
+def coerce_max_fixes(value: Any, default: int | None = None) -> int | None:
+    """Validate a review-fix cap coming from config or untrusted arguments."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError("max_fixes must be an integer")
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if not isinstance(value, int):
+        raise ValueError(f"max_fixes must be an integer, got {type(value).__name__}")
+    if value < 0:
+        raise ValueError("max_fixes must not be negative")
+    return value
+
 
 def _read_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as f:

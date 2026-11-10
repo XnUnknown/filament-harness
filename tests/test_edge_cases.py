@@ -194,6 +194,19 @@ class TestEdgeCases(unittest.TestCase):
             result = tools.run_shell('python -c "print(chr(88) * 500)"')
             self.assertIn(chr(10) + "[full output saved: ", result)
 
+    def test_run_rejects_invalid_max_fixes_before_work(self):
+        from filament.orchestrator import Orchestrator
+
+        with tempfile.TemporaryDirectory() as d:
+            orch = Orchestrator(client_kind="mock", config=HarnessConfig(), shell_cwd=d)
+            with self.assertRaises(ValueError):
+                orch.run(
+                    [{"task": "Write add(a, b)", "target": "out.py"}],
+                    "out.py",
+                    max_fixes="2",  # type: ignore[arg-type]
+                )
+            self.assertFalse((Path(d) / "out.py").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

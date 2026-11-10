@@ -40,7 +40,7 @@ Example task file:
 - Context budget: enforced near 120k tokens (approx., 4 chars/token) with safety margin.
 - Writes: append batch after all agents finish; fixes apply by exact line number.
 - Security: target paths must stay inside the working root unless explicitly allowed.
-- Tool arguments: `run_shell` accepts only positive timeouts (default `timeout_shell`, capped at 86400s) and `read_file` only positive `max_chars`; invalid values raise `ValueError` before reaching `subprocess` or slicing.
+- Tool arguments: `run_shell` accepts only positive timeouts (default `timeout_shell`, capped at 86400s) and `read_file` only positive `max_chars`; invalid values raise `ValueError` before reaching `subprocess` or slicing. `max_fixes` must be null or a non-negative integer.
 - Provider transport: HTTP response bodies are capped at 8 MiB (`MAX_RESPONSE_BYTES`) and provider error text at 64 KiB; larger bodies raise `RuntimeError` before JSON decoding. `[llm].timeout` must be a whole number of seconds between 1 and 86400.
 
 ## Providers
@@ -66,6 +66,20 @@ filament-tui
 
 The TUI supports provider/settings/context/execution/path/run configuration, task
 management, config save/load, and running the harness with live result output.
+
+## Electron backend
+
+`python -m filament.backend_server` is the newline-delimited JSON backend used by
+the Electron app. Each request is one UTF-8 JSON object per line; each response is
+one line, either `{"id": ..., "ok": true, "result": ...}` or
+`{"id": ..., "ok": false, "error": "..."}`. Request lines are capped at 1 MiB
+(`MAX_REQUEST_LINE_BYTES`); a malformed, non-object, or oversized request gets an
+error response and the session keeps running.
+
+`ping` returns the package version. `set_config` validates a copy of the live
+config before publishing it: unknown keys and wrong JSON types are rejected, a
+failed update leaves the previous config in place, and a successful update rebuilds
+the LLM client and toolset so provider changes take effect.
 
 ## Configuration
 

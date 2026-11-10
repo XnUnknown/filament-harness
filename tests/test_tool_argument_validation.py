@@ -8,6 +8,7 @@ from filament.config import (
     MAX_SHELL_TIMEOUT_SECONDS,
     HarnessConfig,
     coerce_char_limit,
+    coerce_max_fixes,
     coerce_timeout,
 )
 from filament.context import ContextBudget
@@ -62,6 +63,25 @@ class TestCoerceCharLimit(unittest.TestCase):
         for value in (0, -5):
             with self.assertRaises(ValueError):
                 coerce_char_limit(value)
+
+
+class TestCoerceMaxFixes(unittest.TestCase):
+    def test_none_uses_default(self):
+        self.assertIsNone(coerce_max_fixes(None))
+        self.assertEqual(coerce_max_fixes(None, 3), 3)
+
+    def test_accepts_zero_and_positive_int(self):
+        self.assertEqual(coerce_max_fixes(0), 0)
+        self.assertEqual(coerce_max_fixes(4), 4)
+
+    def test_accepts_whole_float(self):
+        self.assertEqual(coerce_max_fixes(2.0), 2)
+
+    def test_rejects_bool_string_fraction_and_negative(self):
+        for value in (True, "2", 2.5, -1):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    coerce_max_fixes(value)
 
 
 class TestShellTimeoutArguments(unittest.TestCase):

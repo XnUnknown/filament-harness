@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .agent import CodingAgent
-from .config import HarnessConfig, load_config
+from .config import HarnessConfig, coerce_max_fixes, load_config
 from .context import ContextBudget
 from .files import append_code, ensure_target_within_root, extract_code, replace_line
 from .llm import build_client
@@ -76,6 +76,7 @@ class Orchestrator:
         fix: bool = True,
         max_fixes: int | None = None,
     ):
+        max_fixes = coerce_max_fixes(max_fixes)
         task_specs = self._coerce_task_specs(tasks)
         flattened = flatten_tasks(task_specs)
         if not flattened:

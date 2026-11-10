@@ -115,6 +115,12 @@ class ChatOrchestrator:
             if message.get("role") == "user":
                 self.history.append(str(message.get("content", "")))
 
+    def apply_config(self, config: HarnessConfig) -> None:
+        """Adopt a validated config and rebuild components that captured it."""
+        self.config = config
+        self.client = build_client(config.llm)
+        self.toolbox = Toolbox(self.shell_cwd, config)
+
     def plan(self, request: str) -> tuple[str, list[dict[str, Any]]]:
         self.messages.append({"role": "user", "content": request})
         self.history.append(request)
