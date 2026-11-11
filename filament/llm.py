@@ -387,7 +387,9 @@ class OllamaClient:
         for chunk in iter_json_lines(resp):
             if _cancelled(cancel):
                 break
-            message = chunk.get("message") or {}
+            message = chunk.get("message")
+            if not isinstance(message, dict):
+                message = {}
             text = _text(message.get("content"))
             if text:
                 parts.append(text)
@@ -600,15 +602,18 @@ class OpenAICompatibleClient:
                 continue
             if not isinstance(chunk, dict):
                 continue
-            if chunk.get("usage"):
+            chunk_usage = chunk.get("usage")
+            if isinstance(chunk_usage, dict) and chunk_usage:
                 usage = {
-                    "prompt_tokens": (chunk["usage"] or {}).get("prompt_tokens"),
-                    "completion_tokens": (chunk["usage"] or {}).get("completion_tokens"),
+                    "prompt_tokens": chunk_usage.get("prompt_tokens"),
+                    "completion_tokens": chunk_usage.get("completion_tokens"),
                 }
             for choice in chunk.get("choices") or []:
                 if not isinstance(choice, dict):
                     continue
-                delta = choice.get("delta") or {}
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    continue
                 text = _text(delta.get("content"))
                 if text:
                     parts.append(text)
@@ -666,6 +671,14 @@ def _openai_message(message: dict[str, Any]) -> dict[str, Any]:
             if isinstance(call, dict) and call.get("name")
         ]
     return out
+
+
+def _block_index(event: dict[str, Any]) -> int:
+    """Return an Anthropic content-block index, tolerating malformed values."""
+    try:
+        return int(event.get("index", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 class AnthropicClient:
@@ -834,9 +847,10 @@ class AnthropicClient:
                 continue
             kind = event.get("type")
             if kind == "content_block_start":
-                index = int(event.get("index", 0))
-                block = event.get("content_block") or {}
-                blocks[index] = {
+                block = event.get("content_block")
+                if not isinstance(block, dict):
+                    block = {}
+                blocks[_block_index(event)] = {
                     "type": block.get("type"),
                     "text": str(block.get("text") or ""),
                     "id": block.get("id") or "",
@@ -844,8 +858,10 @@ class AnthropicClient:
                     "json": "",
                 }
             elif kind == "content_block_delta":
-                index = int(event.get("index", 0))
-                delta = event.get("delta") or {}
+                delta = event.get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                index = _block_index(event)
                 item = blocks.setdefault(
                     index, {"type": "text", "text": "", "id": "", "name": "", "json": ""}
                 )
@@ -857,15 +873,22 @@ class AnthropicClient:
                 elif delta.get("type") == "input_json_delta":
                     item["json"] += str(delta.get("partial_json") or "")
             elif kind == "message_delta":
-                finish = str((event.get("delta") or {}).get("stop_reason") or "")
-                event_usage = event.get("usage") or {}
-                if event_usage:
+                delta = event.get("delta")
+                if isinstance(delta, dict):
+                    finish = str(delta.get("stop_reason") or "")
+                event_usage = event.get("usage")
+                if isinstance(event_usage, dict) and event_usage:
                     usage = {
                         "prompt_tokens": event_usage.get("input_tokens"),
                         "completion_tokens": event_usage.get("output_tokens"),
                     }
             elif kind == "error":
-                message = (event.get("error") or {}).get("message") or "anthropic stream error"
+                error = event.get("error")
+                message = (
+                    error.get("message")
+                    if isinstance(error, dict)
+                    else None
+                ) or "anthropic stream error"
                 raise RuntimeError(f"anthropic request failed: {message}")
         texts = [item["text"] for item in blocks.values() if item.get("type") == "text"]
         calls: list[ToolCall] = []

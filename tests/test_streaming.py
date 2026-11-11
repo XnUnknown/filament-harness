@@ -46,6 +46,21 @@ class TestOpenAIStream(unittest.TestCase):
         )
         self.assertEqual(result.content, "ok")
 
+    def test_malformed_chunk_shapes_are_skipped(self):
+        client = OpenAICompatibleClient(model="m", base_url="http://localhost:1", stream=True)
+        result = client._read_stream(
+            FakeStream(
+                [
+                    sse({"choices": [{"delta": "nope"}]}),
+                    sse({"usage": "nope", "choices": [{"delta": {"content": "ok"}}]}),
+                    sse({"choices": [{"delta": {"content": "!"}}]}),
+                ]
+            ),
+            None,
+            None,
+        )
+        self.assertEqual(result.content, "ok!")
+
     def test_cancel_stops_reading(self):
         client = OpenAICompatibleClient(model="m", base_url="http://localhost:1", stream=True)
         lines = [sse({"choices": [{"delta": {"content": "one"}}]}), sse({"choices": [{"delta": {"content": "two"}}]})]
@@ -71,6 +86,18 @@ class TestAnthropicStream(unittest.TestCase):
         self.assertEqual(result.tool_calls[0].arguments, {"pattern": "x"})
         self.assertEqual(result.finish_reason, "tool_use")
         self.assertEqual(result.usage["completion_tokens"], 7)
+
+    def test_malformed_event_shapes_are_skipped(self):
+        client = AnthropicClient(model="m", base_url="http://localhost:1", stream=True)
+        lines = [
+            sse({"type": "content_block_start", "index": "bad", "content_block": "nope"}),
+            sse({"type": "content_block_delta", "index": "bad", "delta": "nope"}),
+            sse({"type": "message_delta", "delta": "nope", "usage": "nope"}),
+            sse({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+            sse({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}),
+        ]
+        result = client._read_stream(FakeStream(lines), None, None)
+        self.assertEqual(result.content, "ok")
 
     def test_messages_are_converted_and_tool_results_grouped(self):
         system, conversation = _anthropic_messages(
@@ -141,6 +168,17 @@ class TestOllamaStream(unittest.TestCase):
         self.assertEqual(result.content, "Hi")
         self.assertEqual(result.tool_calls[0].arguments, {"path": "."})
         self.assertEqual(result.usage["prompt_tokens"], 3)
+        self.assertEqual(result.finish_reason, "stop")
+
+    def test_malformed_message_shapes_are_skipped(self):
+        client = OllamaClient(model="m", base_url="http://localhost:1", stream=True)
+        lines = [
+            json.dumps({"message": "nope", "done": False}),
+            json.dumps({"message": {"content": "ok"}, "done": False}),
+            json.dumps({"message": None, "done": True, "done_reason": "stop"}),
+        ]
+        result = client._read_stream(FakeStream(lines, "application/x-ndjson"), None, None)
+        self.assertEqual(result.content, "ok")
         self.assertEqual(result.finish_reason, "stop")
 
 
