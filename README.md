@@ -98,6 +98,14 @@ Important settings:
 - `command_allowlist`: optional command prefixes
 - `[llm]`: `kind`, `model`, `base_url`, `timeout` (seconds, default 120)
 
+Config values are type-checked when the file loads: numbers must be numbers, booleans
+must be `true` or `false`, and `[llm]` must be a table. A quoted `"false"` is rejected
+instead of acting like `true`, so a typo cannot silently enable `allow_outside_target`.
+Every bad top-level key is listed in one `ValueError`, for example
+`config error: invalid configuration: max_tokens must be an integer, got str '120000'`.
+Whole floats such as `120000.0` are accepted for integer settings; fractional values
+are rejected outside float settings such as `budget_margin`.
+
 Environment overrides: `FILAMENT_CLIENT`, `FILAMENT_MODEL`, `FILAMENT_OLLAMA_URL`,
 `FILAMENT_MAX_TOKENS`, `FILAMENT_WORKERS`, `FILAMENT_TIMEOUT_SHELL`, `FILAMENT_TIMEOUT`, `FILAMENT_USE_OLLAMA`.
 

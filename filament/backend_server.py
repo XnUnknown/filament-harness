@@ -21,22 +21,6 @@ STATE: dict[str, Any] = {
 # One request per line. Cap the frame so a runaway client cannot exhaust memory.
 MAX_REQUEST_LINE_BYTES = 1_048_576
 
-_INT_KEYS = {
-    "max_tokens",
-    "chars_per_token",
-    "workers",
-    "max_tasks",
-    "timeout_shell",
-    "max_shell_output",
-}
-_FLOAT_KEYS = {"budget_margin"}
-_BOOL_KEYS = {
-    "allow_outside_target",
-    "atomic_writes",
-    "use_shell",
-    "offload_shell_output",
-}
-
 
 def _resolve_workspace(value: Any) -> Path:
     if not value:
@@ -90,41 +74,6 @@ def _config_to_dict(config: HarnessConfig) -> dict[str, Any]:
     }
 
 
-def _coerce_config_value(key: str, value: Any) -> Any:
-    """Reject wrong JSON types before they reach arithmetic or truthiness checks."""
-    if key in _INT_KEYS:
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"{key} must be an integer")
-        return value
-    if key in _FLOAT_KEYS:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"{key} must be a number")
-        return value
-    if key in _BOOL_KEYS:
-        if not isinstance(value, bool):
-            raise ValueError(f"{key} must be a boolean")
-        return value
-    if key == "command_allowlist":
-        if not isinstance(value, list) or not all(isinstance(prefix, str) for prefix in value):
-            raise ValueError("command_allowlist must be a list of strings")
-        return list(value)
-    return value
-
-
-def _coerce_llm_value(key: str, value: Any) -> Any:
-    if key == "timeout":
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError("llm.timeout must be an integer number of seconds")
-        return value
-    if key == "use_ollama_env":
-        if not isinstance(value, bool):
-            raise ValueError("llm.use_ollama_env must be a boolean")
-        return value
-    if not isinstance(value, str):
-        raise ValueError(f"llm.{key} must be a string")
-    return value
-
-
 def _apply_config(config: HarnessConfig, updates: Any) -> HarnessConfig:
     """Return a validated copy; the caller's config is never mutated on failure."""
     if not isinstance(updates, dict):
@@ -141,11 +90,13 @@ def _apply_config(config: HarnessConfig, updates: Any) -> HarnessConfig:
                     raise ValueError(f"unknown llm config key: {inner_key}")
                 if inner_value is None:
                     continue
-                setattr(candidate.llm, inner_key, _coerce_llm_value(inner_key, inner_value))
+                setattr(candidate.llm, inner_key, inner_value)
             continue
         if key not in HarnessConfig.__dataclass_fields__:
             raise ValueError(f"unknown config key: {key}")
-        setattr(candidate, key, _coerce_config_value(key, value))
+        setattr(candidate, key, value)
+    # HarnessConfig.validate owns type checks for every source (TOML and API),
+    # so rejected updates never leave a half-applied config behind.
     candidate.validate()
     return candidate
 

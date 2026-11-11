@@ -5,9 +5,104 @@ import os
 import tomllib
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .llm import _is_local_url
+
+
+def _type_name(value: Any) -> str:
+    return type(value).__name__
+
+
+def _preview(value: Any, limit: int = 40) -> str:
+    """Short repr so error text stays readable and never dumps a whole value."""
+    text = repr(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def coerce_str(value: Any, name: str) -> str:
+    """Accept a non-empty string, rejecting numbers and other scalars."""
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string, got {_type_name(value)} {_preview(value)}")
+    if not value.strip():
+        raise ValueError(f"{name} must not be empty")
+    return value
+
+
+def coerce_optional_str(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string or unset, got {_type_name(value)} {_preview(value)}")
+    return value
+
+
+def coerce_int(value: Any, name: str, minimum: int | None = None) -> int:
+    """Accept an integer (or a whole float), rejecting bools, strings, fractions."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer, got {_type_name(value)} {_preview(value)}")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}")
+    return value
+
+
+def coerce_number(value: Any, name: str) -> float:
+    """Accept an int or float, rejecting bools and strings."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number, got {_type_name(value)} {_preview(value)}")
+    return float(value)
+
+
+def coerce_bool(value: Any, name: str) -> bool:
+    """Accept only a real boolean; a quoted "false" must never act like true."""
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be true or false, got {_type_name(value)} {_preview(value)}")
+    return value
+
+
+def coerce_str_list(value: Any, name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list of strings, got {_type_name(value)} {_preview(value)}")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{name} entries must be non-empty strings, got {_type_name(item)} {_preview(item)}")
+        result.append(item)
+    return result
+
+
+class _ConfigIssues:
+    """Collect per-field failures so one load reports every bad key at once."""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def run(self, check: Callable[[], Any]) -> None:
+        try:
+            check()
+        except ValueError as exc:
+            self.messages.append(str(exc))
+
+    def raise_if_any(self, prefix: str = "") -> None:
+        if not self.messages:
+            return
+        detail = "; ".join(self.messages)
+        raise ValueError(f"{prefix}: {detail}" if prefix else detail)
+
+
+# Integer config keys and their minimum accepted value.
+_INT_FIELDS = {
+    "max_tokens": 1024,
+    "chars_per_token": 1,
+    "workers": 1,
+    "max_tasks": 1,
+    "timeout_shell": 1,
+    "max_shell_output": 256,
+}
+_BOOL_FIELDS = ("allow_outside_target", "atomic_writes", "use_shell", "offload_shell_output")
+_LLM_KINDS = ("auto", "mock", "ollama", "openai", "anthropic")
 
 
 @dataclass
@@ -21,12 +116,22 @@ class LLMConfig:
     use_ollama_env: bool = False
 
     def validate(self) -> None:
-        if self.kind not in {"auto", "mock", "ollama", "openai", "anthropic"}:
-            raise ValueError(f"unknown llm kind: {self.kind}")
-        if not self.model.strip():
-            raise ValueError("llm model must not be empty")
-        if self.base_url and not self.base_url.startswith(("http://", "https://")):
-            raise ValueError("llm base_url must be http(s)")
+        issues = _ConfigIssues()
+        issues.run(self._coerce_types)
+        issues.run(self._check_timeout)
+        issues.raise_if_any()
+        self._check_semantics()
+
+    def _coerce_types(self) -> None:
+        # Field order decides which wrong llm value is named first.
+        self.kind = coerce_str(self.kind, "llm.kind")
+        self.model = coerce_str(self.model, "llm.model")
+        self.base_url = coerce_optional_str(self.base_url, "llm.base_url")
+        self.api_key = coerce_optional_str(self.api_key, "llm.api_key")
+        self.reasoning_effort = coerce_optional_str(self.reasoning_effort, "llm.reasoning_effort")
+        self.use_ollama_env = coerce_bool(self.use_ollama_env, "llm.use_ollama_env")
+
+    def _check_timeout(self) -> None:
         if self.timeout is None:
             self.timeout = 120
         timeout = coerce_timeout(self.timeout, 120, "llm timeout")
@@ -35,7 +140,13 @@ class LLMConfig:
         if timeout != int(timeout):
             raise ValueError("llm timeout must be a whole number of seconds")
         self.timeout = int(timeout)
-        if self.reasoning_effort is not None and self.reasoning_effort not in {"low", "medium", "high"}:
+
+    def _check_semantics(self) -> None:
+        if self.kind not in _LLM_KINDS:
+            raise ValueError(f"unknown llm kind: {self.kind}")
+        if self.base_url and not self.base_url.startswith(("http://", "https://")):
+            raise ValueError("llm base_url must be http(s)")
+        if self.reasoning_effort not in (None, "low", "medium", "high"):
             raise ValueError("reasoning_effort must be low, medium, high, or unset")
         if self.kind in {"openai", "anthropic", "ollama"}:
             if self.kind == "ollama":
@@ -68,29 +179,32 @@ class HarnessConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
 
     def validate(self) -> "HarnessConfig":
-        if self.max_tokens < 1024:
-            raise ValueError("max_tokens must be at least 1024")
-        if self.chars_per_token < 1:
-            raise ValueError("chars_per_token must be positive")
-        if not (0.0 <= self.budget_margin < 0.5):
-            raise ValueError("budget_margin must be between 0 and 0.5")
-        if self.workers < 1:
-            raise ValueError("workers must be at least 1")
-        if self.max_tasks < 1:
-            raise ValueError("max_tasks must be at least 1")
-        if self.timeout_shell < 1:
-            raise ValueError("timeout_shell must be at least 1")
-        if self.max_shell_output < 256:
-            raise ValueError("max_shell_output must be at least 256")
-        if not isinstance(self.command_allowlist, list):
-            raise ValueError("command_allowlist must be a list")
-        if not isinstance(self.offload_shell_output, bool):
-            raise ValueError("offload_shell_output must be a boolean")
-        for prefix in self.command_allowlist:
-            if not isinstance(prefix, str) or not prefix.strip():
-                raise ValueError("command_allowlist entries must be non-empty strings")
-        self.llm.validate()
+        """Coerce and type-check every field; report all bad keys in one error."""
+        issues = _ConfigIssues()
+        for name, minimum in _INT_FIELDS.items():
+            issues.run(lambda name=name, minimum=minimum: self._set_int(name, minimum))
+        for name in _BOOL_FIELDS:
+            issues.run(lambda name=name: self._set_bool(name))
+        issues.run(self._check_budget_margin)
+        issues.run(self._apply_allowlist)
+        issues.run(self.llm.validate)
+        issues.raise_if_any("invalid configuration")
         return self
+
+    def _set_int(self, name: str, minimum: int) -> None:
+        setattr(self, name, coerce_int(getattr(self, name), name, minimum))
+
+    def _set_bool(self, name: str) -> None:
+        setattr(self, name, coerce_bool(getattr(self, name), name))
+
+    def _apply_allowlist(self) -> None:
+        self.command_allowlist = coerce_str_list(self.command_allowlist, "command_allowlist")
+
+    def _check_budget_margin(self) -> None:
+        margin = coerce_number(self.budget_margin, "budget_margin")
+        if not (0.0 <= margin < 0.5):
+            raise ValueError("budget_margin must be between 0 and 0.5")
+        self.budget_margin = margin
 
     @property
     def effective_max_tokens(self) -> int:
@@ -163,7 +277,13 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def _from_dict(data: dict[str, Any]) -> HarnessConfig:
+    if not isinstance(data, dict):
+        raise ValueError(f"configuration must be a table, got {type(data).__name__}")
     llm_data = data.get("llm", {})
+    if llm_data is None:
+        llm_data = {}
+    if not isinstance(llm_data, dict):
+        raise ValueError(f"llm must be a table, got {type(llm_data).__name__} {_preview(llm_data)}")
     llm = LLMConfig(**{k: v for k, v in llm_data.items() if k in LLMConfig.__dataclass_fields__})
     cfg_data = {k: v for k, v in data.items() if k != "llm" and k in HarnessConfig.__dataclass_fields__}
     return HarnessConfig(llm=llm, **cfg_data)
