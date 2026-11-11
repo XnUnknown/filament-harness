@@ -88,7 +88,7 @@ class TestBackendProcess(unittest.TestCase):
             reply = json.loads(proc.stdout.decode("utf-8"))
             self.assertTrue(reply["ok"])
             self.assertEqual(reply["result"]["version"], __version__)
-            self.assertEqual(Path(reply["result"]["workspace"]), workspace.resolve())
+            self.assertEqual(Path(reply["result"]["workspace"]).resolve(), workspace.resolve())
 
     def test_bad_line_does_not_end_the_session(self):
         with tempfile.TemporaryDirectory() as tmp:
