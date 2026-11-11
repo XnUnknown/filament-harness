@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .config import DEFAULT_READ_MAX_CHARS, HarnessConfig, coerce_char_limit, coerce_timeout
+from .shell import prepare_command
 
 
 class Toolbox:
@@ -124,27 +125,15 @@ class Toolbox:
         resolved_timeout = coerce_timeout(timeout, self.config.timeout_shell)
         use_shell = self.config.use_shell
         try:
-            if use_shell:
-                completed = subprocess.run(
-                    command,
-                    shell=True,
-                    cwd=str(self.root),
-                    capture_output=True,
-                    text=True,
-                    timeout=resolved_timeout,
-                    errors="replace",
-                )
-            else:
-                import shlex
-                completed = subprocess.run(
-                    shlex.split(command),
-                    shell=False,
-                    cwd=str(self.root),
-                    capture_output=True,
-                    text=True,
-                    timeout=resolved_timeout,
-                    errors="replace",
-                )
+            completed = subprocess.run(
+                prepare_command(command, use_shell),
+                shell=use_shell,
+                cwd=str(self.root),
+                capture_output=True,
+                text=True,
+                timeout=resolved_timeout,
+                errors="replace",
+            )
             output = (completed.stdout or "") + (completed.stderr or "")
             if len(output) > self.config.max_shell_output:
                 saved_path = self._offload_shell_output(output)

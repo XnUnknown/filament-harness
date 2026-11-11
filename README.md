@@ -93,7 +93,10 @@ Important settings:
 - `timeout_shell`: shell timeout
 - `allow_outside_target`: allow writing outside working root
 - `atomic_writes`: write complete files via temp file and atomic replace when enabled
-- `use_shell`: use shell mode for `run_shell`
+- `use_shell`: use shell mode for `run_shell`. When `false`, the command is split
+  into an argument list with platform-aware quoting, so native Windows paths keep
+  their backslashes; both the agent toolset and the chat/TUI toolbox use the same
+  splitter (`filament/shell.py`).
 - `offload_shell_output`: save oversized `run_shell` output under `.filament/runs` and return its path
 - `command_allowlist`: optional command prefixes
 - `[llm]`: `kind`, `model`, `base_url`, `timeout` (seconds, default 120)
