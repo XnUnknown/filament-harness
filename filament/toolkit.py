@@ -722,7 +722,14 @@ class ToolRegistry:
             for item in root.glob(pattern):
                 if not item.is_file():
                     continue
-                if any(part in IGNORED_DIRS for part in item.parts):
+                # Compare against the search root, not the absolute path: a
+                # workspace that lives under a directory named "build" or
+                # "dist" must still return files.
+                try:
+                    relative = item.relative_to(root)
+                except ValueError:
+                    relative = item
+                if any(part in IGNORED_DIRS for part in relative.parts[:-1]):
                     continue
                 matches.append(item)
         except (OSError, ValueError) as exc:

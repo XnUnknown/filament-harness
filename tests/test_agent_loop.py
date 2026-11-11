@@ -8,7 +8,7 @@ from filament.agent_loop import AgentLoop
 from filament.chat import ChatOrchestrator
 from filament.config import HarnessConfig
 from filament.llm import ChatResult, MockLLM, ToolCall
-from filament.session import create_session, list_sessions, load_session
+from filament.session import Session, create_session, list_sessions, load_session
 
 
 def scripted(*items):
@@ -148,6 +148,51 @@ class TestBasicLoop(AgentLoopTestCase):
         self.assertEqual(client.requests, [])
 
 
+class TestCancellation(AgentLoopTestCase):
+    def _run_cancelling(self, result):
+        holder = {}
+
+        class CancelMidCall:
+            supports_tools = True
+            stream = False
+
+            def generate(self, prompt, system=None):
+                return ""
+
+            def chat(self, messages, tools=None, on_delta=None, cancel=None):
+                holder["loop"]._cancel.set()
+                return result
+
+        loop = AgentLoop(
+            HarnessConfig(), self.root, create_session(self.root), client=CancelMidCall()
+        )
+        holder["loop"] = loop
+        return loop, loop.run("stop me")
+
+    def test_cancel_during_the_model_call_reports_cancelled(self):
+        _loop, result = self._run_cancelling(ChatResult())
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(result.content, "Stopped at your request.")
+
+    def test_cancel_does_not_execute_tools_from_the_partial_stream(self):
+        partial = ChatResult(
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments={"path": "cancel.txt", "content": "x\n"},
+                )
+            ]
+        )
+        loop, result = self._run_cancelling(partial)
+        self.assertEqual(result.status, "cancelled")
+        self.assertFalse((self.root / "cancel.txt").exists())
+        tool_messages = [message for message in loop.messages if message.get("role") == "tool"]
+        self.assertEqual(len(tool_messages), 1)
+        self.assertEqual(tool_messages[0]["tool_call_id"], "call_1")
+        self.assertIn("cancelled", tool_messages[0]["content"])
+
+
 class TestQuestions(AgentLoopTestCase):
     def test_ask_user_pauses_and_resumes(self):
         client = scripted(
@@ -242,6 +287,80 @@ class TestSubagents(AgentLoopTestCase):
         chat.send("delegate")
         child_tools = [names for kind, names in client.tool_lists if kind == "child"]
         self.assertNotIn("spawn_agent", child_tools[0])
+
+
+class TestToolPairingRepair(AgentLoopTestCase):
+    def _session(self, messages, pending=None):
+        session = create_session(self.root)
+        session.messages = list(messages)
+        session.pending_question = pending
+        return session
+
+    def test_interrupted_tool_call_gets_a_result_before_the_next_request(self):
+        session = self._session(
+            [
+                {"role": "user", "content": "do a thing"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_x", "name": "run_shell", "arguments": {"command": "echo hi"}}
+                    ],
+                },
+            ]
+        )
+        client = MockLLM([{"content": "resumed"}])
+        loop = AgentLoop(HarnessConfig(), self.root, session, client=client)
+        result = loop.run("continue please")
+        self.assertEqual(result.status, "done")
+        sent = client.requests[0]
+        self.assertEqual(
+            [message["role"] for message in sent],
+            ["system", "user", "assistant", "tool", "user"],
+        )
+        repaired = sent[3]
+        self.assertEqual(repaired["tool_call_id"], "call_x")
+        self.assertTrue(repaired.get("is_error"))
+        self.assertIn("interrupted", repaired["content"])
+
+    def test_unanswered_question_is_closed_when_a_new_message_starts(self):
+        session = self._session(
+            [
+                {"role": "user", "content": "build it"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_q", "name": "ask_user", "arguments": {"question": "Which?"}}
+                    ],
+                },
+            ],
+            pending={
+                "id": "q_1",
+                "tool_call_id": "call_q",
+                "question": "Which?",
+                "options": [],
+            },
+        )
+        client = MockLLM([{"content": "moving on"}])
+        loop = AgentLoop(HarnessConfig(), self.root, session, client=client)
+        loop.run("do something else")
+        sent = client.requests[0]
+        tool_messages = [message for message in sent if message.get("role") == "tool"]
+        self.assertEqual(len(tool_messages), 1)
+        self.assertEqual(tool_messages[0]["tool_call_id"], "call_q")
+        self.assertIn("did not answer", tool_messages[0]["content"])
+
+    def test_repair_leaves_a_paired_conversation_unchanged(self):
+        client = scripted(
+            {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+            {"content": "done"},
+        )
+        chat = self.make_chat(client)
+        chat.send("look around")
+        tool_messages = [message for message in chat.messages if message.get("role") == "tool"]
+        self.assertEqual(len(tool_messages), 1)
+        self.assertNotIn("Not executed", tool_messages[0]["content"])
 
 
 if __name__ == "__main__":

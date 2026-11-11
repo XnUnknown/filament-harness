@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.0.
+Version 0.5.1.
 
 ## 1. Purpose
 
@@ -88,11 +88,12 @@ Guarantees:
 
 - Every assistant tool call receives a tool message before the next model call.
   When the loop pauses for a question or finishes mid-batch, remaining calls get
-  an explicit "not executed" result.
+  an explicit "not executed" result. A session reloaded after an interruption
+  is repaired the same way before the next request.
 - Four identical tool-call batches in a row stop the loop with `stalled` rather
   than burning tokens.
-- `cancel()` is checked before each model call; an in-flight HTTP request is
-  allowed to complete, then the loop stops.
+- `cancel()` is checked before each model call; a stop during a stream ends the
+  turn as `cancelled` without executing tools from the partial response.
 - `max_steps` bounds the main loop and each subagent independently.
 
 ## 4. Tools

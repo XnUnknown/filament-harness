@@ -151,6 +151,25 @@ class TestSearchTools(ToolkitTestCase):
         with self.assertRaises(ToolError):
             self.registry.execute("glob", {"pattern": "../*.py"})
 
+    def test_glob_works_when_workspace_path_contains_an_ignored_dir_name(self):
+        # A checkout under ".../build/project" must not be filtered out just
+        # because an ancestor directory shares a name with an ignored folder.
+        nested = self.root / "build" / "project"
+        (nested / "src").mkdir(parents=True)
+        (nested / "app.py").write_text("print(1)\n", encoding="utf-8")
+        (nested / "src" / "lib.py").write_text("print(2)\n", encoding="utf-8")
+        registry = ToolRegistry(nested, self.config)
+        out = registry.execute("glob", {"pattern": "**/*.py"})
+        self.assertIn("app.py", out)
+        self.assertIn("src/lib.py", out)
+
+    def test_glob_still_skips_ignored_directories_inside_the_workspace(self):
+        self.write("src/a.py", "")
+        self.write("node_modules/pkg/x.py", "")
+        out = self.registry.execute("glob", {"pattern": "**/*.py"})
+        self.assertIn("src/a.py", out)
+        self.assertNotIn("node_modules", out)
+
     def test_list_dir_marks_directories(self):
         self.write("pkg/a.py", "")
         out = self.registry.execute("list_dir", {"path": "."})

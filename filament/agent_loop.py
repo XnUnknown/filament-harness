@@ -254,7 +254,7 @@ class AgentLoop:
                 "role": "tool",
                 "tool_call_id": str(pending.get("tool_call_id") or ""),
                 "name": "ask_user",
-                "content": str(answer),
+                "content": str(answer or "").strip() or "(no answer given)",
             }
         )
         self.session.pending_question = None
@@ -271,6 +271,7 @@ class AgentLoop:
 
     # -- the loop -----------------------------------------------------------
     def _loop(self) -> LoopResult:
+        self._repair_tool_pairing()
         final = ""
         status = "done"
         error: str | None = None
@@ -297,6 +298,10 @@ class AgentLoop:
             try:
                 result = self._chat()
             except Exception as exc:  # noqa: BLE001
+                if self._cancel.is_set():
+                    status = "cancelled"
+                    final = "Stopped at your request."
+                    break
                 status = "error"
                 error = str(exc)
                 final = f"Model request failed: {exc}"
@@ -325,6 +330,16 @@ class AgentLoop:
                     for call in calls
                 ],
             )
+
+            if self._cancel.is_set():
+                # A stop during the model call wins over whatever the truncated
+                # stream produced, and those tools must not run.
+                for call in calls:
+                    self._append_tool(call, "Not executed: the run was cancelled.", ok=False)
+                final = "Stopped at your request."
+                status = "cancelled"
+                self._sync()
+                break
 
             if not calls:
                 final = content.strip() or "(the model returned an empty response)"
@@ -547,15 +562,81 @@ class AgentLoop:
 
     # -- message plumbing ---------------------------------------------------
     def _append_tool(self, call: ToolCall, output: str, ok: bool = True) -> None:
+        self._append_tool_result(call.id, call.name, output, ok)
+
+    def _append_tool_result(
+        self,
+        tool_call_id: str,
+        name: str,
+        output: str,
+        ok: bool = True,
+    ) -> None:
         message: dict[str, Any] = {
             "role": "tool",
-            "tool_call_id": call.id,
-            "name": call.name,
+            "tool_call_id": str(tool_call_id),
+            "name": str(name),
             "content": output,
         }
         if not ok:
             message["is_error"] = True
         self.messages.append(message)
+
+    def _repair_tool_pairing(self) -> int:
+        """Give every assistant tool call a result before the next model turn.
+
+        A run interrupted during a tool (Ctrl+C, process kill) or a session that
+        stopped on a question can leave an assistant ``tool_calls`` message with
+        no matching ``tool`` message.  Providers reject that sequence, so the
+        missing results are inserted where the conversation resumes.
+        """
+        repaired = 0
+        index = 0
+        while index < len(self.messages):
+            message = self.messages[index]
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                index += 1
+                continue
+            raw_calls = message.get("tool_calls")
+            if not isinstance(raw_calls, list) or not raw_calls:
+                index += 1
+                continue
+            calls = [call for call in raw_calls if isinstance(call, dict)]
+            cursor = index + 1
+            answered: set[str] = set()
+            while cursor < len(self.messages):
+                candidate = self.messages[cursor]
+                if not isinstance(candidate, dict) or candidate.get("role") != "tool":
+                    break
+                answered.add(str(candidate.get("tool_call_id") or ""))
+                cursor += 1
+            for position, call in enumerate(calls, 1):
+                call_id = str(call.get("id") or "")
+                if not call_id:
+                    call_id = f"call_recovered_{index}_{position}"
+                    call["id"] = call_id
+                if call_id in answered:
+                    continue
+                name = str(call.get("name") or "tool")
+                content = (
+                    "Not executed: the user did not answer this question."
+                    if name == "ask_user"
+                    else f"Not executed: the previous turn was interrupted before {name} returned a result."
+                )
+                self.messages.insert(
+                    cursor,
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": content,
+                        "is_error": True,
+                    },
+                )
+                cursor += 1
+                answered.add(call_id)
+                repaired += 1
+            index = cursor
+        return repaired
 
     def _clip_tool_output(self, call: ToolCall, output: str) -> str:
         limit = max(256, int(self.config.tool_output_limit))

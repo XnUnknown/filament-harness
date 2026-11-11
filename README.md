@@ -22,6 +22,9 @@ Python 3.11+.
   boundary.
 - **Questions, not guesses** — the `ask_user` tool pauses the loop and resumes
   when the user answers, with a native question card in the UI.
+- **Interrupt-safe history** — Stop abandons a partial model turn without
+  running its tools, and a session interrupted mid-tool receives the missing
+  tool result before the next request, so no provider sees an unanswered call.
 - **Streaming** — OpenAI-compatible, Anthropic, and Ollama responses stream to
   the UI with tool-call fragments assembled across chunks.
 - **Plan mode** — read-only exploration and a concrete plan before any writes.
