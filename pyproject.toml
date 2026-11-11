@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "filament-harness"
-version = "0.4.20"
-description = "Lightweight coding harness for local LLMs with bounded context, parallel agents, and config support"
+version = "0.5.0"
+description = "Agentic coding harness with tool calling, subagent sessions, bounded context, and an Electron UI"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Nishant Vishwakarma", email = "XnUnknown@users.noreply.github.com" }]
 license = "MIT"
-keywords = ["llm", "harness", "local-llm", "agents", "context-budget"]
+keywords = ["llm", "harness", "agent", "local-llm", "subagents", "context-budget", "coding-agent"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",

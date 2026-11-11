@@ -1,16 +1,35 @@
+# Context
 max_tokens = 120000
 chars_per_token = 4
 budget_margin = 0.05
 workers = 4
 max_tasks = 32
+
+# Agent loop
+max_steps = 40
+subagent_max_steps = 24
+subagent_max_tokens = 32000
+max_depth = 1
+tool_output_limit = 12000
+keep_recent_messages = 8
+compact_threshold = 0.75
+compact_with_llm = true
+
+# Execution and safety
 timeout_shell = 60
 max_shell_output = 20000
 allow_outside_target = false
 atomic_writes = true
 use_shell = true
+offload_shell_output = true
 command_allowlist = []
 
 [llm]
 kind = "auto"
 model = "llama3.2"
 base_url = "http://localhost:11434"
+timeout = 120
+stream = true
+max_output_tokens = 4096
+# api_key = "..."
+# reasoning_effort = "low"

@@ -100,8 +100,20 @@ _INT_FIELDS = {
     "max_tasks": 1,
     "timeout_shell": 1,
     "max_shell_output": 256,
+    "max_steps": 1,
+    "subagent_max_steps": 1,
+    "subagent_max_tokens": 1024,
+    "tool_output_limit": 256,
+    "keep_recent_messages": 2,
+    "max_depth": 0,
 }
-_BOOL_FIELDS = ("allow_outside_target", "atomic_writes", "use_shell", "offload_shell_output")
+_BOOL_FIELDS = (
+    "allow_outside_target",
+    "atomic_writes",
+    "use_shell",
+    "offload_shell_output",
+    "compact_with_llm",
+)
 _LLM_KINDS = ("auto", "mock", "ollama", "openai", "anthropic")
 
 
@@ -114,11 +126,14 @@ class LLMConfig:
     timeout: int = 120
     reasoning_effort: str | None = None
     use_ollama_env: bool = False
+    stream: bool = True
+    max_output_tokens: int = 4096
 
     def validate(self) -> None:
         issues = _ConfigIssues()
         issues.run(self._coerce_types)
         issues.run(self._check_timeout)
+        issues.run(self._check_output_tokens)
         issues.raise_if_any()
         self._check_semantics()
 
@@ -130,6 +145,10 @@ class LLMConfig:
         self.api_key = coerce_optional_str(self.api_key, "llm.api_key")
         self.reasoning_effort = coerce_optional_str(self.reasoning_effort, "llm.reasoning_effort")
         self.use_ollama_env = coerce_bool(self.use_ollama_env, "llm.use_ollama_env")
+        self.stream = coerce_bool(self.stream, "llm.stream")
+
+    def _check_output_tokens(self) -> None:
+        self.max_output_tokens = coerce_int(self.max_output_tokens, "llm.max_output_tokens", 64)
 
     def _check_timeout(self) -> None:
         if self.timeout is None:
@@ -175,6 +194,15 @@ class HarnessConfig:
     atomic_writes: bool = True
     use_shell: bool = True
     offload_shell_output: bool = True
+    # Agent loop
+    max_steps: int = 40
+    subagent_max_steps: int = 24
+    subagent_max_tokens: int = 32_000
+    tool_output_limit: int = 12_000
+    keep_recent_messages: int = 8
+    compact_threshold: float = 0.75
+    compact_with_llm: bool = True
+    max_depth: int = 1
     command_allowlist: list[str] = field(default_factory=list)
     llm: LLMConfig = field(default_factory=LLMConfig)
 
@@ -186,6 +214,7 @@ class HarnessConfig:
         for name in _BOOL_FIELDS:
             issues.run(lambda name=name: self._set_bool(name))
         issues.run(self._check_budget_margin)
+        issues.run(self._check_compact_threshold)
         issues.run(self._apply_allowlist)
         issues.run(self.llm.validate)
         issues.raise_if_any("invalid configuration")
@@ -205,6 +234,12 @@ class HarnessConfig:
         if not (0.0 <= margin < 0.5):
             raise ValueError("budget_margin must be between 0 and 0.5")
         self.budget_margin = margin
+
+    def _check_compact_threshold(self) -> None:
+        threshold = coerce_number(self.compact_threshold, "compact_threshold")
+        if not (0.1 <= threshold <= 0.95):
+            raise ValueError("compact_threshold must be between 0.1 and 0.95")
+        self.compact_threshold = threshold
 
     @property
     def effective_max_tokens(self) -> int:

@@ -1,7 +1,8 @@
-"""Interactive terminal user interface for Filament Harness.
+"""Interactive terminal UI for Filament.
 
-The TUI uses only the Python standard library so it works in the same minimal
-environment as the harness itself.
+The chat screen is the primary surface and uses the same agent loop and console
+renderer as the CLI.  The menus remain for editing provider, context, and
+execution settings without touching TOML by hand.  Standard library only.
 """
 from __future__ import annotations
 
@@ -10,8 +11,7 @@ import os
 from pathlib import Path
 
 from .config import HarnessConfig, load_config
-from .llm import build_client
-from .orchestrator import Orchestrator
+from .console import AgentConsole, ConsoleRenderer
 
 
 def _clear() -> None:
@@ -78,6 +78,14 @@ def _dump_config(path: Path, config: HarnessConfig) -> None:
         f"atomic_writes = {str(config.atomic_writes).lower()}",
         f"use_shell = {str(config.use_shell).lower()}",
         f"offload_shell_output = {str(config.offload_shell_output).lower()}",
+        f"max_steps = {config.max_steps}",
+        f"subagent_max_steps = {config.subagent_max_steps}",
+        f"subagent_max_tokens = {config.subagent_max_tokens}",
+        f"tool_output_limit = {config.tool_output_limit}",
+        f"keep_recent_messages = {config.keep_recent_messages}",
+        f"compact_threshold = {config.compact_threshold}",
+        f"compact_with_llm = {str(config.compact_with_llm).lower()}",
+        f"max_depth = {config.max_depth}",
         f"command_allowlist = {json.dumps(config.command_allowlist)}",
         "",
         "[llm]",
@@ -86,6 +94,8 @@ def _dump_config(path: Path, config: HarnessConfig) -> None:
         f"base_url = {json.dumps(llm.base_url or '')}",
         f"api_key = {json.dumps(llm.api_key or '')}",
         f"timeout = {llm.timeout}",
+        f"stream = {str(llm.stream).lower()}",
+        f"max_output_tokens = {llm.max_output_tokens}",
     ]
     if llm.reasoning_effort:
         lines.insert(-1, f"reasoning_effort = {json.dumps(llm.reasoning_effort)}")
@@ -108,43 +118,41 @@ class TUIApp:
         self.fix = True
         self.max_fixes: int | None = None
 
+    # -- menus --------------------------------------------------------------
     def main_menu(self) -> None:
         while True:
             _clear()
-            print("Filament Harness TUI")
+            print("Filament Harness")
             print(_line())
             print(f"Config: {self.config_path} | Provider: {self.config.llm.kind} | Model: {self.config.llm.model}")
-            print(f"Tasks: {len(self.tasks)} | Target: {self.target} | CWD: {self.shell_cwd}")
+            print(f"Workspace: {self.shell_cwd} | Tasks: {len(self.tasks)} | Target: {self.target}")
             print(_line())
-            print("1. Run tasks")
-            print("c. Chat with orchestrator")
-            print("2. Manage tasks")
-            print("3. Provider settings")
-            print("4. Context and budget settings")
-            print("5. Execution and security settings")
-            print("6. Paths and task defaults")
-            print("7. Run settings")
+            print("1. Chat with the agent")
+            print("2. Run a batch of tasks (legacy)")
+            print("3. Manage batch tasks")
+            print("4. Provider settings")
+            print("5. Context and agent settings")
+            print("6. Execution and security settings")
+            print("7. Paths and defaults")
             print("8. Load config")
             print("9. Save config")
             print("0. Show current config")
             print("q. Quit")
             choice = _prompt("Select", "1")
             if choice == "1":
-                self.run_tasks()
-            elif choice.lower() in {"c", "chat"}:
                 self.chat_mode()
             elif choice == "2":
-                self.manage_tasks()
+                self.run_tasks()
             elif choice == "3":
-                self.provider_settings()
+                self.manage_tasks()
             elif choice == "4":
-                self.context_settings()
+                self.provider_settings()
             elif choice == "5":
-                self.execution_settings()
+                self.context_settings()
             elif choice == "6":
-                self.path_settings()
+                self.execution_settings()
             elif choice == "7":
-                self.run_settings()
+                self.path_settings()
             elif choice == "8":
                 self.load_config()
             elif choice == "9":
@@ -158,10 +166,45 @@ class TUIApp:
                 print("Unknown choice.")
                 _prompt("Press Enter to continue", "")
 
+    def chat_mode(self) -> None:
+        from .chat import ChatOrchestrator
+        from .cli import _handle_command
+
+        chat = ChatOrchestrator(self.config, self.shell_cwd, mode="build")
+        console = AgentConsole(chat)
+        _clear()
+        renderer = ConsoleRenderer()
+        renderer._line(renderer._paint("filament", "33") + f"  {self.config.llm.kind}/{self.config.llm.model}")
+        renderer._line(renderer._paint(f"workspace {chat.shell_cwd}  session {chat.session.session_id}", "2"))
+        renderer._line(renderer._paint("commands: /new /sessions /load /mode /compress /todos /context /quit", "2"))
+        while True:
+            try:
+                message = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not message:
+                continue
+            if message.startswith("/") or message.lower() in {"exit", "quit"}:
+                if not _handle_command(chat, message):
+                    break
+                continue
+            try:
+                result = console.run_turn(message)
+            except KeyboardInterrupt:
+                chat.cancel()
+                print("\n[cancelling after the current model call]")
+                continue
+            except Exception as exc:  # noqa: BLE001
+                print(f"error: {exc}")
+                continue
+            console.print_result(result)
+        chat.save()
+
     def manage_tasks(self) -> None:
         while True:
             _clear()
-            print("Tasks")
+            print("Batch Tasks")
             print(_line())
             if not self.tasks:
                 print("(no tasks)")
@@ -215,6 +258,8 @@ class TUIApp:
         effort_default = self.config.llm.reasoning_effort or "none"
         effort = _prompt("Reasoning effort (none/low/medium/high)", effort_default)
         self.config.llm.reasoning_effort = None if effort.lower() in {"", "none", "off", "null"} else effort.lower()
+        self.config.llm.stream = _prompt_bool("Stream responses", self.config.llm.stream)
+        self.config.llm.max_output_tokens = _prompt_int("Max output tokens", self.config.llm.max_output_tokens, 64)
         try:
             self.config.validate()
             print("Settings validated.")
@@ -224,16 +269,21 @@ class TUIApp:
 
     def context_settings(self) -> None:
         _clear()
-        print("Context and Budget Settings")
+        print("Context and Agent Settings")
         print(_line())
-        self.config.max_tokens = _prompt_int("Max tokens", self.config.max_tokens, 1024)
+        self.config.max_tokens = _prompt_int("Max context tokens", self.config.max_tokens, 1024)
         self.config.chars_per_token = _prompt_int("Chars per token", self.config.chars_per_token, 1)
         margin = _prompt("Budget margin (0-0.49)", str(self.config.budget_margin))
         try:
             self.config.budget_margin = float(margin)
         except (TypeError, ValueError):
             pass
-        self.config.max_tasks = _prompt_int("Max tasks", self.config.max_tasks, 1)
+        self.config.max_steps = _prompt_int("Max agent steps", self.config.max_steps, 1)
+        self.config.keep_recent_messages = _prompt_int("Messages kept during compaction", self.config.keep_recent_messages, 2)
+        self.config.subagent_max_tokens = _prompt_int("Subagent context tokens", self.config.subagent_max_tokens, 1024)
+        self.config.subagent_max_steps = _prompt_int("Subagent max steps", self.config.subagent_max_steps, 1)
+        self.config.max_depth = _prompt_int("Subagent nesting depth", self.config.max_depth, 0)
+        self.config.compact_with_llm = _prompt_bool("Summarize old context with the model", self.config.compact_with_llm)
         try:
             self.config.validate()
             print("Settings validated.")
@@ -245,12 +295,14 @@ class TUIApp:
         _clear()
         print("Execution and Security Settings")
         print(_line())
-        self.config.workers = _prompt_int("Workers", self.config.workers, 1)
+        self.config.workers = _prompt_int("Batch workers", self.config.workers, 1)
         self.config.timeout_shell = _prompt_int("Shell timeout seconds", self.config.timeout_shell, 1)
         self.config.max_shell_output = _prompt_int("Max shell output chars", self.config.max_shell_output, 256)
+        self.config.tool_output_limit = _prompt_int("Tool result limit chars", self.config.tool_output_limit, 256)
         self.config.use_shell = _prompt_bool("Use shell mode", self.config.use_shell)
-        self.config.offload_shell_output = _prompt_bool("Offload large shell output to .filament/runs", self.config.offload_shell_output)
-        self.config.allow_outside_target = _prompt_bool("Allow targets outside working root", self.config.allow_outside_target)
+        self.config.offload_shell_output = _prompt_bool("Offload large output to .filament/runs", self.config.offload_shell_output)
+        self.config.atomic_writes = _prompt_bool("Atomic file writes", self.config.atomic_writes)
+        self.config.allow_outside_target = _prompt_bool("Allow paths outside the workspace", self.config.allow_outside_target)
         self.allow_outside_target = self.config.allow_outside_target
         allowlist = _prompt("Command allowlist (comma separated, blank for none)", ", ".join(self.config.command_allowlist))
         self.config.command_allowlist = [item.strip() for item in allowlist.split(",") if item.strip()]
@@ -263,145 +315,17 @@ class TUIApp:
 
     def path_settings(self) -> None:
         _clear()
-        print("Paths and Task Defaults")
+        print("Paths and Defaults")
         print(_line())
-        self.shell_cwd = _prompt("Shell working directory", self.shell_cwd or ".")
-        self.target = _prompt("Default target file", self.target)
-        print(f"Client builder: {build_client(self.config.llm).__class__.__name__}")
+        self.shell_cwd = _prompt("Workspace directory", self.shell_cwd or ".")
+        self.target = _prompt("Default batch target file", self.target)
         _prompt("Press Enter to continue", "")
-
-    def run_settings(self) -> None:
-        _clear()
-        print("Run Settings")
-        print(_line())
-        self.review = _prompt_bool("Enable review", self.review)
-        self.fix = _prompt_bool("Enable line fixes", self.fix)
-        max_fixes = _prompt("Max fixes (blank for all)", "" if self.max_fixes is None else str(self.max_fixes))
-        self.max_fixes = int(max_fixes) if max_fixes.strip() else None
-        _prompt("Press Enter to continue", "")
-
-    def chat_mode(self) -> None:
-        from filament.chat import ChatOrchestrator
-
-        chat = ChatOrchestrator(self.config, self.shell_cwd, mode=self._chat_mode_name())
-        print("Chat with main orchestrator")
-        print(_line())
-        print(f"Session: {chat.session.session_id} | Mode: {chat.mode} | Provider: {self.config.llm.kind} | Model: {self.config.llm.model}")
-        print("If provider shows mock, run this TUI from the project directory containing .env, or pass --config.")
-        print("Commands: /mode auto|plan|review|accept, /sessions, /load <id>, /compress, /config, exit")
-        print("Type your request, or 'exit' to return.")
-        while True:
-            request = _prompt("You")
-            if not request or request.lower() in {"exit", "quit", "q"}:
-                chat.save()
-                return
-            try:
-                if request.startswith("/"):
-                    self._handle_chat_command(chat, request)
-                    continue
-                if chat.is_small_talk(request):
-                    print("Orchestrator:", chat.direct_chat(request))
-                    continue
-                summary, tasks = chat.plan(request)
-                print(f"Orchestrator: {summary}")
-                print("Planned tasks:")
-                for task in tasks:
-                    print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
-                should_run = chat.mode == "auto" or _prompt_bool("Run this plan now?", True)
-                if not should_run:
-                    continue
-                result = chat.run_plan(tasks, review=self.review, fix=self.fix, max_fixes=self.max_fixes)
-                print(_line())
-                for key, value in result.items():
-                    if key == "errors":
-                        print(f"errors: {len(value)}")
-                        for item in value:
-                            print(f"  - {item}")
-                    elif key != "plan_summary":
-                        print(f"{key}: {value}")
-                target = Path(result.get("target_file", "output.py"))
-                if target.exists() and target.stat().st_size <= 20000:
-                    print(_line())
-                    print(target.read_text(encoding="utf-8", errors="replace"))
-                print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
-                # Autonomous review/follow-up loop: continue until orchestrator says done or no more plan.
-                for _ in range(5):
-                    follow_up = chat.reflect(result)
-                    if not follow_up:
-                        break
-                    follow_summary, follow_tasks = follow_up
-                    print(f"Orchestrator follow-up: {follow_summary}")
-                    print("Planned tasks:")
-                    for task in follow_tasks:
-                        print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
-                    if chat.mode != "auto" and not _prompt_bool("Run follow-up plan?", True):
-                        break
-                    follow_result = chat.run_plan(follow_tasks, review=self.review, fix=self.fix, max_fixes=self.max_fixes)
-                    print(_line())
-                    for key, value in follow_result.items():
-                        if key == "errors":
-                            print(f"errors: {len(value)}")
-                            for item in value:
-                                print(f"  - {item}")
-                        elif key != "plan_summary":
-                            print(f"{key}: {value}")
-                    result = follow_result
-                    target = Path(result.get("target_file", "output.py"))
-                    if target.exists() and target.stat().st_size <= 20000:
-                        print(_line())
-                        print(target.read_text(encoding="utf-8", errors="replace"))
-                print(f"Session: {chat.session.session_id} | Mode: {chat.mode}")
-            except Exception as exc:  # noqa: BLE001
-                print(f"Error: {exc}")
-            # Let the orchestrator loop continue immediately; session is saved after each plan.
-
-    def _chat_mode_name(self) -> str:
-        return "auto"
-
-    def _handle_chat_command(self, chat, command: str) -> None:
-        from filament.chat import ChatOrchestrator  # noqa: F401
-
-        parts = command.strip().split()
-        name = parts[0].lower()
-        if name == "/mode":
-            if len(parts) != 2 or parts[1].lower() not in {"auto", "plan", "review", "accept"}:
-                print("Usage: /mode auto|plan|review|accept")
-                return
-            chat.mode = parts[1].lower()
-            chat.session.mode = chat.mode
-            chat.save()
-            print(f"Mode set to {chat.mode}.")
-            return
-        if name == "/sessions":
-            sessions = ChatOrchestrator.list_sessions(self.shell_cwd)
-            if not sessions:
-                print("(no saved sessions)")
-                return
-            for session in sessions[:20]:
-                print(f"{session.session_id}  mode={session.mode}  updated={session.updated_at:.0f}")
-            return
-        if name == "/load":
-            if len(parts) != 2:
-                print("Usage: /load <session_id>")
-                return
-            try:
-                chat.load_session(parts[1])
-                print(f"Loaded session {parts[1]} (mode={chat.mode}).")
-            except Exception as exc:  # noqa: BLE001
-                print(f"Load failed: {exc}")
-            return
-        if name == "/compress":
-            changed = chat.compress_if_needed()
-            print("Context compressed." if changed else "No compression needed.")
-            return
-        if name == "/config":
-            print(f"cwd={self.shell_cwd} mode={chat.mode} session={chat.session.session_id}")
-            return
-        print("Unknown command. Commands: /mode, /sessions, /load, /compress, /config")
 
     def run_tasks(self) -> None:
+        from .orchestrator import Orchestrator
+
         _clear()
-        print("Run Tasks")
+        print("Run Batch Tasks")
         print(_line())
         if not self.tasks:
             task = _prompt("Enter first task (or blank to cancel)")
@@ -429,7 +353,6 @@ class TUIApp:
             _prompt("Press Enter to continue", "")
             return
         print(_line())
-        print("Result:")
         for key, value in result.items():
             if key == "errors":
                 print(f"errors: {len(value)}")
@@ -437,18 +360,12 @@ class TUIApp:
                     print(f"  - {item}")
             else:
                 print(f"{key}: {value}")
-        target_path = Path(result.get("target_file", target))
-        if target_path.exists() and target_path.stat().st_size <= 20000:
-            print(_line())
-            print("Generated file:")
-            print(target_path.read_text(encoding="utf-8", errors="replace"))
         _prompt("Press Enter to continue", "")
 
     def load_config(self) -> None:
         path = _prompt("Config path", str(self.config_path))
         try:
-            new_config = load_config(path)
-            self.config = new_config
+            self.config = load_config(path)
             self.config_path = Path(path)
             self.allow_outside_target = self.config.allow_outside_target
             print("Config loaded.")
@@ -480,11 +397,10 @@ class TUIApp:
         print("tasks:", self.tasks)
         print("shell_cwd:", self.shell_cwd)
         print("target:", self.target)
-        print("review:", self.review, "fix:", self.fix, "max_fixes:", self.max_fixes)
 
 
 def run_tui(config_path: str | Path = "filament.toml") -> None:
     try:
         TUIApp(config_path).main_menu()
     except KeyboardInterrupt:
-        print("\nExiting Filament TUI.")
+        print("\nExiting Filament.")

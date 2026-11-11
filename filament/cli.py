@@ -1,4 +1,9 @@
-"""CLI entry point."""
+"""Command line entry point.
+
+``filament`` with no subcommand starts the interactive agent.  ``filament run``
+keeps the old batch-task runner for scripted jobs, ``filament tui`` opens the
+terminal menu, and ``filament serve`` runs the JSON backend for the Electron UI.
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,9 +11,10 @@ import json
 import sys
 from pathlib import Path
 
-from .config import load_config
-from .orchestrator import Orchestrator
-from .tui import run_tui
+from . import __version__
+from .chat import ChatOrchestrator
+from .config import HarnessConfig, load_config
+from .console import AgentConsole, ConsoleRenderer
 
 
 def _load_tasks(path: Path) -> tuple[list, str]:
@@ -28,82 +34,122 @@ def _load_tasks(path: Path) -> tuple[list, str]:
     return tasks, target.strip()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="filament", description="Lightweight local LLM coding harness")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+def _apply_overrides(config: HarnessConfig, args: argparse.Namespace) -> HarnessConfig:
+    if getattr(args, "client", None):
+        config.llm.kind = args.client
+    if getattr(args, "model", None):
+        config.llm.model = args.model
+    if getattr(args, "max_tokens", None):
+        config.max_tokens = args.max_tokens
+    if getattr(args, "max_steps", None):
+        config.max_steps = args.max_steps
+    if getattr(args, "reasoning_effort", None):
+        config.llm.reasoning_effort = args.reasoning_effort
+    if getattr(args, "no_stream", False):
+        config.llm.stream = False
+    config.validate()
+    return config
 
-    run = sub.add_parser("run", help="run a batch of coding tasks")
-    run.add_argument("tasks_file", nargs="?", help="JSON file with tasks")
-    run.add_argument("--config", help="path to TOML config")
-    run.add_argument("--target", help="override target file")
-    run.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"])
-    run.add_argument("--model", help="override LLM model")
-    run.add_argument("--max-tokens", type=int, help="context token budget")
-    run.add_argument("--workers", type=int, help="parallel agent count")
-    run.add_argument("--shell-cwd", default=".", help="working directory")
-    run.add_argument("--allow-outside-target", action="store_true", help="allow target outside shell cwd")
-    run.add_argument("--no-review", action="store_true", help="skip review phase")
-    run.add_argument("--no-fix", action="store_true", help="skip line fixes")
-    run.add_argument("--max-fixes", type=int, help="maximum review fixes")
-    run.add_argument("--reasoning-effort", choices=["low", "medium", "high"], help="reasoning effort for supported providers")
-    run.add_argument("--report", help="write JSON report to this path")
-    run.add_argument("--quiet", action="store_true", help="suppress progress")
 
-    chat = sub.add_parser("chat", help="talk to the main orchestrator")
-    chat.add_argument("--config", default="filament.toml", help="config path")
+def _print_banner(chat: ChatOrchestrator) -> None:
+    renderer = ConsoleRenderer()
+    mode = chat.mode
+    provider = f"{chat.config.llm.kind}/{chat.config.llm.model}"
+    renderer._line(renderer._paint("filament", "33") + f"  {provider}  ·  mode={mode}")
+    renderer._line(renderer._paint(f"workspace {chat.shell_cwd}", "2"))
+    renderer._line(renderer._paint("commands: /new /sessions /load /mode /compress /todos /context /help /quit", "2"))
 
-    tui = sub.add_parser("tui", help="interactive terminal UI")
-    tui.add_argument("--config", default="filament.toml", help="config path")
 
-    args = parser.parse_args()
+def _handle_command(chat: ChatOrchestrator, command: str) -> bool:
+    parts = command.strip().split()
+    name = parts[0].lower()
+    if name in {"/quit", "/exit", "exit", "quit"}:
+        return False
+    if name == "/help":
+        print("Session: /new, /sessions, /load <id>, /mode build|plan, /compress, /todos, /context, /quit")
+        return True
+    if name == "/new":
+        session = chat.new_session(parts[1] if len(parts) > 1 else chat.mode)
+        print(f"new session: {session.session_id}")
+        return True
+    if name == "/sessions":
+        sessions = ChatOrchestrator.list_sessions(chat.shell_cwd)
+        if not sessions:
+            print("(no saved sessions)")
+        for session in sessions[:20]:
+            print(f"{session.session_id}  {session.display_title[:60]}  ({session.status})")
+        return True
+    if name == "/load":
+        if len(parts) != 2:
+            print("usage: /load <session_id>")
+            return True
+        try:
+            chat.load_session(parts[1])
+            print(f"loaded {parts[1]} ({len(chat.messages)} messages)")
+        except Exception as exc:  # noqa: BLE001
+            print(f"load failed: {exc}")
+        return True
+    if name == "/mode":
+        if len(parts) != 2 or parts[1].lower() not in {"build", "plan"}:
+            print("usage: /mode build|plan")
+            return True
+        print(f"mode: {chat.set_mode(parts[1])}")
+        return True
+    if name == "/compress":
+        stats = chat.compress()
+        print(f"tokens {stats.get('before_tokens')} -> {stats.get('after_tokens')}")
+        return True
+    if name == "/todos":
+        todos = chat.session.todos
+        if not todos:
+            print("(no todos)")
+        for item in todos:
+            mark = {"completed": "[x]", "in_progress": "[~]"}.get(str(item.get("status")), "[ ]")
+            print(f"{mark} {item.get('content', '')}")
+        return True
+    if name == "/context":
+        state = chat.state()
+        print(f"{state['tokens']}/{state['limit']} tokens · {state['messages']} messages · {state['status']}")
+        return True
+    print(f"unknown command: {name} (try /help)")
+    return True
 
-    if args.cmd == "tui":
-        run_tui(args.config)
-        return 0
-    if args.cmd == "chat":
-        from filament.chat import ChatOrchestrator
 
-        cfg = load_config(args.config)
-        chat_orchestrator = ChatOrchestrator(cfg, ".")
-        print("Filament chat. Type 'exit' to quit.")
-        while True:
-            try:
-                request = input("You: ").strip()
-            except EOFError:
-                return 0
-            if not request or request.lower() in {"exit", "quit"}:
-                return 0
-            try:
-                summary, tasks = chat_orchestrator.plan(request)
-                print("Orchestrator:", summary)
-                print("Plan:")
-                for task in tasks:
-                    print(f"  - [{task['id']}] {task['task']} -> {task['target']}")
-                answer = input("Run? [Y/n] ").strip().lower()
-                if answer in {"n", "no"}:
-                    continue
-                result = chat_orchestrator.run_plan(tasks)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Error: {exc}")
-                continue
-            print(json.dumps({k: v for k, v in result.items() if k != "plan_summary"}, indent=2))
-        return 0
-    if args.cmd != "run":
-        return 2
+def _chat_repl(config: HarnessConfig, args: argparse.Namespace) -> int:
+    chat = ChatOrchestrator(config, getattr(args, "shell_cwd", "."), mode=getattr(args, "mode", "build"))
+    console = AgentConsole(chat)
+    _print_banner(chat)
+    while True:
+        try:
+            message = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not message:
+            continue
+        if message.startswith("/") or message.lower() in {"exit", "quit"}:
+            if not _handle_command(chat, message):
+                break
+            continue
+        try:
+            result = console.run_turn(message)
+        except KeyboardInterrupt:
+            chat.cancel()
+            print("\n[cancelling after the current model call]")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: {exc}")
+            continue
+        console.print_result(result)
+    chat.save()
+    return 0
+
+
+def _run_batch(args: argparse.Namespace) -> int:
+    from .orchestrator import Orchestrator
 
     try:
-        config = load_config(args.config)
-        if args.client is not None:
-            config.llm.kind = args.client
-        if args.model is not None:
-            config.llm.model = args.model
-        if args.max_tokens is not None:
-            config.max_tokens = args.max_tokens
-        if args.workers is not None:
-            config.workers = args.workers
-        if args.reasoning_effort is not None:
-            config.llm.reasoning_effort = args.reasoning_effort
-        config.validate()
+        config = _apply_overrides(load_config(args.config), args)
     except Exception as exc:  # noqa: BLE001
         print(f"config error: {exc}", file=sys.stderr)
         return 2
@@ -140,6 +186,86 @@ def main() -> int:
     if args.report:
         Path(args.report).write_text(output + "\n", encoding="utf-8")
     return 1 if result.get("errors") else 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="filament", description="Lightweight agentic coding harness")
+    parser.add_argument("--version", action="version", version=f"filament {__version__}")
+    # Global chat options so `filament --client mock` works without a subcommand.
+    # SUPPRESS keeps them absent unless the user actually passes them, which lets
+    # the `chat` subparser supply its own defaults without conflicts.
+    parser.add_argument("--config", default=argparse.SUPPRESS, help="config path")
+    parser.add_argument("--shell-cwd", default=argparse.SUPPRESS, help="workspace directory")
+    parser.add_argument("--mode", choices=["build", "plan"], default=argparse.SUPPRESS)
+    parser.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"], default=argparse.SUPPRESS)
+    parser.add_argument("--model", default=argparse.SUPPRESS)
+    parser.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--max-steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--reasoning-effort", choices=["low", "medium", "high"], default=argparse.SUPPRESS)
+    parser.add_argument("--no-stream", action="store_true", default=argparse.SUPPRESS)
+    sub = parser.add_subparsers(dest="cmd")
+
+    chat = sub.add_parser("chat", help="interactive agent (default)")
+    chat.add_argument("--config", default=argparse.SUPPRESS, help="config path")
+    chat.add_argument("--shell-cwd", default=argparse.SUPPRESS, help="workspace directory")
+    chat.add_argument("--mode", choices=["build", "plan"], default=argparse.SUPPRESS)
+    chat.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"], default=argparse.SUPPRESS)
+    chat.add_argument("--model", default=argparse.SUPPRESS)
+    chat.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS)
+    chat.add_argument("--max-steps", type=int, default=argparse.SUPPRESS)
+    chat.add_argument("--reasoning-effort", choices=["low", "medium", "high"], default=argparse.SUPPRESS)
+    chat.add_argument("--no-stream", action="store_true", default=argparse.SUPPRESS)
+
+    run = sub.add_parser("run", help="run a batch of coding tasks (legacy)")
+    run.add_argument("tasks_file", nargs="?", help="JSON file with tasks")
+    run.add_argument("--config", help="path to TOML config")
+    run.add_argument("--target", help="override target file")
+    run.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"])
+    run.add_argument("--model", help="override LLM model")
+    run.add_argument("--max-tokens", type=int, help="context token budget")
+    run.add_argument("--max-steps", type=int, help=argparse.SUPPRESS)
+    run.add_argument("--workers", type=int, help="parallel agent count")
+    run.add_argument("--shell-cwd", default=".", help="working directory")
+    run.add_argument("--allow-outside-target", action="store_true", help="allow target outside shell cwd")
+    run.add_argument("--no-review", action="store_true", help="skip review phase")
+    run.add_argument("--no-fix", action="store_true", help="skip line fixes")
+    run.add_argument("--max-fixes", type=int, help="maximum review fixes")
+    run.add_argument("--reasoning-effort", choices=["low", "medium", "high"], help="reasoning effort")
+    run.add_argument("--no-stream", action="store_true", help=argparse.SUPPRESS)
+    run.add_argument("--report", help="write JSON report to this path")
+    run.add_argument("--quiet", action="store_true", help="suppress progress")
+
+    tui = sub.add_parser("tui", help="interactive terminal UI")
+    tui.add_argument("--config", default="filament.toml", help="config path")
+
+    sub.add_parser("serve", help="run the JSON backend for the Electron app")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    command = args.cmd or "chat"
+
+    if command == "tui":
+        from .tui import run_tui
+
+        run_tui(args.config)
+        return 0
+    if command == "serve":
+        from .backend_server import main as backend_main
+
+        backend_main()
+        return 0
+    if command == "run":
+        return _run_batch(args)
+
+    try:
+        config = _apply_overrides(load_config(getattr(args, "config", "filament.toml")), args)
+    except Exception as exc:  # noqa: BLE001
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
+    return _chat_repl(config, args)
 
 
 if __name__ == "__main__":

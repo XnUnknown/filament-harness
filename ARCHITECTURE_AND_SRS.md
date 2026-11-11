@@ -1,324 +1,329 @@
 # Filament Harness — Architecture and SRS
 
-## 1. Purpose and Scope
+Version 0.5.0.
 
-Filament Harness is a lightweight coding harness for local LLMs running on laptops.
-It keeps active context small by giving each coding agent exactly one task, collecting
-results in parallel, and writing code in one batch after all agents complete.
+## 1. Purpose
 
-This document describes the architecture that was implemented and the Software
-Requirements Specification (SRS) for the current version.
+Filament is a small agentic coding harness for local and hosted LLMs. It gives
+a model a real tool surface and a bounded context window, runs subagents in
+their own sessions, and exposes the whole loop through a terminal UI, an
+interactive CLI, and an Electron desktop app.
+
+The design target is a laptop-class workflow: a 7B–32B local model, a project
+directory, and a context budget that stays near 32k–120k tokens instead of
+growing without bound.
 
 ## 2. System Overview
 
-- Project name: `filament-harness`
-- Repository path: `D:/Hermes Agent Workspace/filament-harness`
-- Language/runtime: Python 3.11+
-- LLM access: Ollama (optional) with deterministic mock client for offline tests
-- Primary interfaces: Python API, CLI (`filament run`)
-- Core constraint: active context stays at or below 120,000 tokens (approx.)
+```text
+┌──────────────────────────── UI ────────────────────────────┐
+│ Electron renderer │ TUI / CLI │ Python API │ JSON backend  │
+└───────────────┬────────────────────────────────────────────┘
+                │ events + requests
+┌───────────────▼────────────────────────────────────────────┐
+│ ChatOrchestrator                                           │
+│  · owns one Session                                        │
+│  · builds an AgentLoop per turn                            │
+└───────────────┬────────────────────────────────────────────┘
+                │
+┌───────────────▼────────────────────────────────────────────┐
+│ AgentLoop                                                  │
+│  · messages, steps, budget, cancel event, event sink       │
+│  · tool registry (workspace-scoped)                        │
+│  · compaction before each model call                       │
+│  · subagent factory                                        │
+└───────┬───────────────────────────────┬────────────────────┘
+        │                               │
+┌───────▼────────┐              ┌───────▼────────────────────┐
+│ LLMClient      │              │ ToolRegistry               │
+│ chat + stream  │              │ file / search / shell /    │
+│ tool calls     │              │ todo / ask / spawn / finish│
+└────────────────┘              └────────────────────────────┘
+```
 
-### 2.1 Core Concept
+Core modules:
 
-Instead of one long-lived agent that accumulates the whole codebase in context:
-
-1. The orchestrator decomposes work into independent, exact task instructions.
-2. Each task is given to one spawned agent with minimal or no repository context.
-3. All agents run in parallel.
-4. Their results are collected before any file write occurs.
-5. All code is appended to the target file in one batch.
-6. The resulting file is reviewed using a bounded prompt.
-7. Line-specific fix tasks are spawned only for review findings.
-
-## 3. Architecture
-
-### 3.1 High-Level Components
-
-| Component | Responsibility |
+| Module | Responsibility |
 |---|---|
-| `Orchestrator` | Plans task execution, spawns agents, batches writes, reviews, fixes |
-| `CodingAgent` | Wraps one exact task instruction |
-| `Toolset` | Provides `run_shell` and `spawn_agent(task)` |
-| `LLMClient` | Ollama or mock implementation used by agents |
-| `ContextBudget` | Approximates token usage and trims oldest context |
-| `File helpers` | Code extraction, append writes, exact line replacement |
-| `Review helper` | Bounded review and `FIX line: instruction` parsing |
-| `CLI` | JSON task file execution |
+| `agent_loop.py` | The loop, events, cancel, stall guard, subagent creation |
+| `toolkit.py` | Tool schemas and handlers, path confinement, output limits |
+| `llm.py` | Provider adapters and the neutral chat message format |
+| `stream.py` | SSE / NDJSON parsing, tool-call fragment assembly |
+| `compaction.py` | Token estimates, tool-result pruning, turn-boundary summaries |
+| `session.py` | JSON session persistence, parent links, atomic writes |
+| `chat.py` | Persistent chat wrapper, mode handling, session load/new |
+| `backend_server.py` | Newline-delimited JSON server with streaming notifications |
+| `console.py` | Dependency-free terminal event renderer |
+| `cli.py`, `tui.py` | Entry points and interactive surfaces |
+| `orchestrator.py` | Legacy one-shot batch runner |
 
-### 3.2 Module Layout
+## 3. Agent Loop
 
-```text
-filament-harness/
-  filament/
-    __init__.py
-    agent.py
-    cli.py
-    context.py
-    files.py
-    llm.py
-    orchestrator.py
-    review.py
-    tools.py
-  examples/
-    demo_tasks.json
-  tests/
-    test_basic.py
-  README.md
-  pyproject.toml
-  .gitignore
-```
-
-### 3.3 Data Flow
+Each turn follows the same state machine:
 
 ```text
-Task list + target file
-        |
-        v
-Orchestrator.run(tasks, target_file)
-        |
-        +--> CodingAgent per task
-        |       |
-        |       +--> spawn_agent(task) -> LLM -> code text
-        |
-        +--> Wait for all results
-        |
-        +--> Extract fenced code blocks
-        |
-        +--> Append all code in one batch -> target file
-        |
-        +--> run_shell tests (optional external)
-        |
-        +--> Review(target file) -> FIX lines
-        |
-        +--> Fix agents -> replace exact lines
-        |
-        +--> Rerun tests
+user message
+   │
+   ▼
+compact context if over threshold
+   │
+   ▼
+LLM chat(messages, tools)
+   │           │
+   │           ├── text deltas ──────────────► UI
+   │           └── tool calls
+   ▼
+assistant message recorded
+   │
+   ├── no tool calls ───────────────────────► done
+   │
+   └── execute tools in order
+         ├── normal result ─────────────────► tool message, continue
+         ├── finish ────────────────────────► done with summary
+         ├── ask_user ──────────────────────► awaiting_input, pause
+         └── error ─────────────────────────► tool error, continue
 ```
 
-### 3.4 Concurrency Model
+Guarantees:
 
-- Agents are executed with a thread pool.
-- Default worker count: 4.
-- Agents do not write files directly.
-- File writes happen only after all spawned agents complete.
-- This prevents race conditions, interleaved code, and partial-write ambiguity.
-
-### 3.5 Context Budget
-
-- Approximation: 1 token = 4 characters.
-- Default maximum: 120,000 tokens.
-- Context is stored as chunks in `ContextBudget`.
-- Each shell result, spawn prompt, and LLM result is added to the budget.
-- If the budget is exceeded before a spawn, execution raises an error.
-- When accumulation exceeds the cap, the oldest chunks are removed.
-- Review input is capped to the remaining budget using the tail of the file.
+- Every assistant tool call receives a tool message before the next model call.
+  When the loop pauses for a question or finishes mid-batch, remaining calls get
+  an explicit "not executed" result.
+- Four identical tool-call batches in a row stop the loop with `stalled` rather
+  than burning tokens.
+- `cancel()` is checked before each model call; an in-flight HTTP request is
+  allowed to complete, then the loop stops.
+- `max_steps` bounds the main loop and each subagent independently.
 
 ## 4. Tools
 
-### 4.1 `run_shell(command, timeout=60)`
+Tools are declared once in `ToolRegistry` with a JSON Schema and a handler.
+They are filtered by mode and depth:
 
-- Executes a shell command in the configured working directory.
-- Captures stdout and stderr.
-- Records the command and output in the context budget.
-- Used for tests, linting, build scripts, and other local commands.
+- plan mode exposes only read-only tools (`read_file`, `list_dir`, `glob`,
+  `grep`, `check_python`, `todo_write`, `ask_user`, read-only subagents,
+  `finish`);
+- subagents do not receive `ask_user` or `spawn_agent` when the depth limit is
+  reached.
 
-### 4.2 `spawn_agent(task)`
+Path handling is centralized in `ToolRegistry._resolve`: null bytes, control
+characters, drive-relative paths, and paths outside the workspace are rejected
+unless `allow_outside_target` is set.
 
-Input:
-- `task`: one exact coding instruction.
+Tool results are clipped at `tool_output_limit`; the full text is saved under
+`.filament/runs` and the excerpt names the saved file.
 
-Behavior:
-- No broad repository context is added.
-- Uses a system prompt requiring one fenced code block and no prose.
-- Returns raw generated text.
-- Records prompt and result in the context budget.
-- Refuses to run if the context budget is exceeded.
+## 5. Subagents
 
-## 5. File Integration Rules
+`spawn_agent(task, system?)` creates a new `Session` with:
 
-### 5.1 Code Extraction
+- `kind = "subagent"`;
+- `parent_id = <parent session>`;
+- a title from the delegated task;
+- its own `AgentLoop` with `subagent_max_tokens` and `subagent_max_steps`.
 
-- Extract the first fenced code block from LLM output.
-- If no fence exists, fall back to raw text.
-- Trim surrounding whitespace.
+The child runs synchronously from the parent's perspective but streams events
+tagged with `subagent_id`. When it finishes, the parent's tool result is the
+child's final summary. Child files are merged into the parent's change list.
 
-### 5.2 Batch Append
+`spawn_agents(tasks[])` runs up to six children in a thread pool; each child has
+an independent session and event stream.
 
-- Code is never appended until all agents complete.
-- Each extracted code block is appended to the target file in completion order.
-- Parent directories are created automatically.
+`max_depth` defaults to 1, so a subagent cannot spawn another by default.
 
-### 5.3 Line Fixes
+## 6. Context Management
 
-- Review findings use the format: `FIX <line_number>: <instruction>`.
-- Fix agents return only the replacement line.
-- Markdown fences are stripped before replacement.
-- Replacement happens by exact 1-indexed line number.
+Token estimate: `chars / chars_per_token`, with a hard minimum of 1 per message.
 
-## 6. Review Workflow
+Before each model call:
 
-- Review runs after the batch append.
-- Review input is capped to the remaining context budget.
-- The review prompt is separate and bounded.
-- Findings are parsed with a regex.
-- Each finding triggers a fix agent.
-- Fixes are applied and can be followed by targeted tests.
+1. If the estimate is under `compact_threshold × budget`, continue.
+2. Otherwise prune large tool results older than `keep_recent_messages`.
+3. If still over, cut at a user-turn boundary. The cut never separates an
+   assistant tool call from its tool results and never starts the recent window
+   with a dangling tool message.
+4. Replace older turns with one summary message:
+   - deterministic digest of goals, files, commands, notes, and outcomes;
+   - optionally rewritten by the model when `compact_with_llm` is true and the
+     loop is the main agent.
+5. If the result is still too large, drop the oldest whole turns.
 
-## 7. Environment and Configuration
+Compaction stats and the current context usage are emitted as events, so the UI
+can show the meter and a compaction marker.
 
-| Setting | Default | Purpose |
-|---|---|---|
-| `FILAMENT_MODEL` | `llama3.2` | Ollama model name |
-| `FILAMENT_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `FILAMENT_USE_OLLAMA` | unset | Set to `1` to use Ollama instead of mock |
-| CLI `--client` | `auto` | Select `auto`, `mock`, or `ollama` |
-| CLI `--workers` | `4` | Agent thread pool size |
-| CLI `--shell-cwd` | `.` | Working directory for shell tools |
+## 7. Sessions
 
-## 8. Software Requirements Specification
-
-### 8.1 Functional Requirements
-
-| ID | Requirement |
-|---|---|
-| FR-1 | The system shall accept a list of independent coding task instructions. |
-| FR-2 | The system shall accept a target file path for generated code. |
-| FR-3 | The system shall spawn one agent per task. |
-| FR-4 | Each agent shall receive one exact task and no broad repository context. |
-| FR-5 | The system shall support parallel agent execution. |
-| FR-6 | The system shall wait for all agents to complete before file writes. |
-| FR-7 | The system shall extract code from LLM output. |
-| FR-8 | The system shall append all generated code in one batch. |
-| FR-9 | The system shall track approximate token context usage. |
-| FR-10 | The system shall refuse to exceed the configured token budget for a spawn. |
-| FR-11 | The system shall provide a `run_shell` tool. |
-| FR-12 | The system shall provide a `spawn_agent(task)` tool. |
-| FR-13 | The system shall review the target file after the batch write. |
-| FR-14 | The system shall identify line-specific fixes from review output. |
-| FR-15 | The system shall spawn fix agents for review findings. |
-| FR-16 | The system shall replace exact lines during fixes. |
-| FR-17 | The system shall expose a CLI for JSON task files. |
-| FR-18 | The system shall support mock and Ollama LLM clients. |
-
-### 8.2 Non-Functional Requirements
-
-| ID | Requirement |
-|---|---|
-| NFR-1 | Active context shall stay at or below 120,000 tokens by default. |
-| NFR-2 | Context approximation shall use 4 characters per token. |
-| NFR-3 | The architecture shall avoid whole-repository prompts to coding agents. |
-| NFR-4 | File writes shall be batched and deterministic. |
-| NFR-5 | Parallel agents shall not write files directly. |
-| NFR-6 | Review shall use bounded input based on remaining context. |
-| NFR-7 | The system shall run without external network access when using the mock client. |
-| NFR-8 | The codebase shall use Python 3.11+ standard library where practical. |
-| NFR-9 | Operations shall be suitable for laptop-scale local LLMs. |
-
-### 8.3 Constraints
-
-- The token count is approximate, not exact.
-- Agents depend on model compliance with the one-fenced-block instruction.
-- Ollama must be installed and running for real local model execution.
-- The mock client is for tests and does not represent real model behavior.
-- Generated code quality depends on model quality.
-- The harness targets lightweight coding workflows, not full-repository refactors.
-
-## 9. Interfaces
-
-### 9.1 Python API
-
-```python
-from filament.orchestrator import Orchestrator
-
-orch = Orchestrator(client_kind="mock", max_tokens=120_000)
-result = orch.run(
-    [
-        "Write a Python function named add(a, b) that returns a + b.",
-        "Write a Python function named mul(a, b) that returns a * b.",
-    ],
-    "output.py",
-)
-```
-
-### 9.2 CLI
-
-```bash
-filament run tasks.json
-```
-
-`tasks.json` format:
+Sessions are JSON files at `.filament/sessions/<id>.json`:
 
 ```json
 {
-  "tasks": [
-    "Write a Python function named add(a, b) that returns a + b."
-  ],
-  "target": "output.py"
+  "session_id": "20261111-223636-c86b6c45",
+  "cwd": "D:/project",
+  "mode": "build",
+  "parent_id": null,
+  "kind": "main",
+  "title": "fix the failing tests",
+  "status": "done",
+  "messages": [],
+  "todos": [],
+  "pending_question": null,
+  "child_sessions": [],
+  "files_changed": [],
+  "usage": {"steps": 5, "tokens": 541, "compactions": 0}
 }
 ```
 
-### 9.3 Task JSON Schema (informal)
+Writes use a temporary file and atomic replace. Old session files missing new
+fields load with defaults; unknown fields are ignored.
 
-- `tasks`: array of strings (required)
-- `target`: string (optional, default `output.py`)
-- `workers`: may be supplied through CLI, not JSON
+## 8. Providers and Streaming
 
-## 10. Error Handling
+Neutral message format:
 
-- A spawn that would exceed the context budget raises `RuntimeError`.
-- Missing target directories are created during append.
-- Out-of-range line fixes are skipped instead of crashing the whole run.
-- Ollama connection failures propagate as standard Python exceptions.
-- Mock client is used by default for offline and test workflows.
+```python
+{"role": "assistant", "content": "...", "tool_calls": [{"id", "name", "arguments"}]}
+{"role": "tool", "tool_call_id": "...", "name": "...", "content": "..."}
+```
 
-## 11. Verification and Acceptance
+Adapters:
 
-The implementation was verified with:
+| Provider | Tool schema | Stream | Notes |
+|---|---|---|---|
+| `mock` | neutral | whole text | Deterministic scripts for tests |
+| `ollama` | OpenAI function tools | `/api/chat` NDJSON | Local or hosted, optional key |
+| `openai` | OpenAI function tools | SSE | Works with Groq, Together, vLLM, LM Studio |
+| `anthropic` | `input_schema` | SSE | Tool results grouped into user messages |
 
-- Unit test: `tests/test_basic.py`
-  - Result: passes
-  - Checks 2 appended functions
-  - Checks context tokens ≤ 120,000
-- CLI demo: `examples/demo_tasks.json`
-  - Result: generated `add` and `mul` functions in one batch
-  - Measured context: 95 tokens
+If a local model returns no native tool calls but emits a single JSON object
+such as `{"tool": "read_file", "arguments": {...}}`, the loop accepts it as one
+action and continues. This is a fallback, not the primary path.
 
-Acceptance criteria:
-- Target file exists after a run.
-- Generated code is appended in batch order.
-- Context usage remains within configured limit.
-- Fixes are applied by exact line number.
-- No parallel agent writes directly to files.
+Responses are read through a bounded reader (8 MiB), and error bodies are
+truncated to 64 KiB before being included in an exception.
 
-## 12. Known Limitations
+## 9. Backend and UI
 
-- Token counts are character-based approximations.
-- Real models may include prose despite system constraints.
-- Automatic review depends on model adherence to `FIX <line>: <instruction>`.
-- Line-based fixes can be fragile on large files.
-- The harness is not intended for large refactors or security audits.
+The Electron app spawns `python -m filament.backend_server` with the repository
+root on `PYTHONPATH`. The protocol is newline-delimited JSON:
 
-## 12.5 Version 0.2 Enhancements
+- request: `{"id", "method", "params"}`
+- response: `{"id", "ok": true, "result"}` or `{"id", "ok": false, "error"}`
+- notification: `{"event": "...", "session_id": "..."}`
 
-The implementation was expanded beyond the initial scaffold:
+`chat`, `answer`, and `skip_question` run on worker threads; the reader remains
+free for `cancel`. A write lock serializes stdout across threads.
 
-- Configuration system: `filament/config.py`, TOML/env/CLI overrides, validation, safety margin.
-- Task model: `filament/tasks.py` supports nested subtasks, IDs, targets, enablement, and flattening.
-- Per-task target files and inheritance of parent targets.
-- Security and robustness: bounded shell timeout/output, optional command allowlist, path containment, atomic line replacement, fsync append.
-- Context improvements: configurable chars/token, remaining budget checks, overflow markers.
-- Review parser: tolerant `FIX`/`Fix line` parser with deduplication.
-- CLI: config, override, report output, quiet mode, exit codes.
-- Tests: config, tasks, files, review, context, shell, integration.
-- Packaging/docs: version 0.2.0, typed marker, config example, README, subtask example.
+Methods: `ping`, `get_config`, `set_config`, `select_workspace`, `get_state`,
+`chat`, `answer`, `skip_question`, `cancel`, `new_session`, `set_mode`,
+`list_sessions`, `load_session`, `delete_session`, `get_messages`,
+`compress_context`, `read_file`, `list_dir`.
 
-Generated artifacts (code files) are intentionally excluded from version control.
+The renderer is event-driven and holds no Node access. It renders assistant
+deltas, tool cards, nested subagent streams, todos, context, questions, and a
+final done summary. History is rebuilt from stored neutral messages.
 
-## 13. Future Improvements
+## 10. Configuration
 
-- Optional exact tokenizer integration.
-- Per-task target files and line ranges.
-- Structured test runner integration.
-- Stronger code extraction and validation.
-- Optional Git diff review step.
-- Persistent run artifacts and reproducible logs.
+`HarnessConfig` validates every field on load. Important additions in 0.5:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `max_steps` | 40 | Main loop limit |
+| `subagent_max_steps` | 24 | Child loop limit |
+| `subagent_max_tokens` | 32000 | Child context budget |
+| `tool_output_limit` | 12000 | Inline tool result chars |
+| `keep_recent_messages` | 8 | Recent window for compaction |
+| `compact_threshold` | 0.75 | Compaction trigger |
+| `compact_with_llm` | true | Model-written summaries |
+| `max_depth` | 1 | Subagent nesting |
+| `llm.stream` | true | Streaming requests |
+| `llm.max_output_tokens` | 4096 | Response output cap |
+
+Environment overrides remain available through `FILAMENT_*` variables. A
+project-local `.env` is read only for the active configuration location, and a
+quoted `"false"` is rejected instead of acting like `true`.
+
+## 11. Software Requirements Specification
+
+### 11.1 Functional requirements
+
+| ID | Requirement |
+|---|---|
+| FR-1 | The system shall run an agent loop with native tool calling and streamed output. |
+| FR-2 | The system shall expose read, write, exact edit, multi-edit, list, glob, grep, shell, syntax-check, todo, question, subagent, and finish tools. |
+| FR-3 | The system shall confine every path to the workspace unless explicitly allowed. |
+| FR-4 | The system shall keep context under the configured budget using pruning and turn-boundary compaction. |
+| FR-5 | The system shall preserve the pairing of assistant tool calls and tool results across compaction. |
+| FR-6 | The system shall give every subagent its own session, history, budget, and step limit. |
+| FR-7 | The system shall return a subagent's final summary to the parent as a tool result. |
+| FR-8 | The system shall pause on `ask_user` and resume with the user's answer. |
+| FR-9 | The system shall stop on `finish`, cancellation, step limits, or repeated tool-call stalls. |
+| FR-10 | The system shall persist session state atomically, including parent links and pending questions. |
+| FR-11 | The system shall stream JSON notifications while a turn runs. |
+| FR-12 | The system shall support build and read-only plan modes. |
+| FR-13 | The system shall expose CLI, TUI, Python, and Electron surfaces. |
+| FR-14 | The system shall retain the legacy batch runner. |
+
+### 11.2 Non-functional requirements
+
+| ID | Requirement |
+|---|---|
+| NFR-1 | Default main context shall remain at or below 120k estimated tokens, with subagents at 32k. |
+| NFR-2 | Provider responses shall be read with a hard byte cap. |
+| NFR-3 | Session writes shall be atomic and bounded. |
+| NFR-4 | The Electron renderer shall run with context isolation and no Node integration. |
+| NFR-5 | The terminal surfaces shall use only the Python standard library. |
+| NFR-6 | A failed summary or failed subagent shall not abort the parent run. |
+| NFR-7 | The mock provider shall support tests without network access. |
+
+## 12. Error Handling
+
+- Tool errors become `ERROR:` tool results the model can recover from.
+- Provider failures retry once, then end the turn with `status = "error"`.
+- A failed subagent becomes a tool error in the parent; other parallel children
+  still return.
+- A failed compaction summary falls back to a deterministic digest.
+- A broken event sink is ignored so a UI problem cannot stop a run.
+- Oversized or malformed backend request lines produce one error response and do
+  not terminate the server.
+
+## 13. Verification
+
+- 193 unit tests cover the loop, tools, editing, subagents, question
+  pause/resume, compaction, streaming parsers, backend protocol, configuration,
+  and the legacy batch runner.
+- The full HTTP streaming path was exercised against a protocol-faithful fake
+  Ollama server: five steps, file creation, todos, a subagent with its own
+  session, and a finish summary.
+- The Electron app was exercised with that server: streaming text, tool cards,
+  nested subagent output, question cards, session load, settings save, and both
+  themes.
+- CI runs the suite on Windows for Python 3.11 and 3.12, compiles the package,
+  smoke-tests the legacy CLI, installs Electron, and syntax-checks the renderer
+  and main process.
+
+## 14. Legacy Compatibility
+
+`filament run <tasks.json>` still uses `Orchestrator`, which spawns one focused
+completion per task, appends extracted code in one batch, and optionally runs a
+line-level review/fix pass. Its modules (`agent.py`, `tools.py`, `files.py`,
+`review.py`, `tasks.py`, `context.py`) remain for existing scripts and tests.
+New work should use the agent loop.
+
+## 15. Known Limitations
+
+- Token counts are estimates.
+- Compaction is lossy and cannot preserve every detail.
+- Tool-calling quality depends on the model; small local models may need the
+  JSON fallback or a larger model.
+- The harness is not a sandbox. Shell access is real; use an allowlist and a
+  disposable workspace for untrusted prompts.
+- Cancellation takes effect between model calls, not mid-request.
+
+## 16. Future Work
+
+- Exact tokenizer integration per provider.
+- Optional approval gates for shell and destructive edits.
+- Diff review before writes in a dedicated review mode.
+- Richer file tree and diff viewer in the Electron app.
+- Resumable background subagents across app restarts.

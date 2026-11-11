@@ -1,39 +1,147 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Filament Harness</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Filament</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <aside class="sidebar">
-    <h1>Filament</h1>
-    <label>Mode
-      <select id="mode">
-        <option value="auto">auto</option>
-        <option value="plan">plan</option>
-        <option value="review">review</option>
-        <option value="accept">accept</option>
-      </select>
-    </label>
-    <button id="new-session">New session</button>
-    <button id="select-workspace">Select workspace</button>
-    <button id="list-sessions">List sessions</button>
-    <pre id="session-info"></pre>
-    <button id="compress">Compress context</button>
-  </aside>
-  <main>
-    <header>
-      <h2>Agent chat</h2>
-      <span id="status">Starting backend...</span>
-    </header>
-    <section id="transcript"></section>
-    <form id="composer">
-      <input id="message" type="text" placeholder="Ask Filament to build or fix something" autocomplete="off" />
-      <button type="submit">Send</button>
-    </form>
-  </main>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">F</div>
+        <div class="brand-text">
+          <strong>Filament</strong>
+          <span>agent harness</span>
+        </div>
+        <button class="icon-btn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">◐</button>
+      </div>
+
+      <button id="select-workspace" class="workspace-card" title="Select workspace">
+        <span class="workspace-label">Workspace</span>
+        <span class="workspace-name" id="workspace-name">Choose a folder</span>
+        <span class="workspace-path" id="workspace-path">No folder selected</span>
+      </button>
+
+      <button id="new-session" class="new-session"><span aria-hidden="true">+</span> New session</button>
+
+      <div class="section-head">
+        <span>Sessions</span>
+        <button id="refresh-sessions" class="icon-btn" title="Refresh sessions" aria-label="Refresh sessions">⟳</button>
+      </div>
+      <div id="session-list" class="session-list">
+        <div class="muted small">No sessions yet</div>
+      </div>
+
+      <div class="sidebar-foot">
+        <div class="provider">
+          <span class="dot" id="provider-dot"></span>
+          <span id="provider-label">Connecting…</span>
+        </div>
+        <button id="settings-button" class="link-btn">Settings</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title-block">
+          <h1 id="session-title">New session</h1>
+          <div class="meta">
+            <span id="session-id">no session</span>
+            <span class="sep">·</span>
+            <span id="status">ready</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div class="segmented" id="mode-toggle" role="group" aria-label="Mode">
+            <button type="button" data-mode="build" class="active">Build</button>
+            <button type="button" data-mode="plan">Plan</button>
+          </div>
+          <button id="cancel" class="danger hidden" type="button">Stop</button>
+        </div>
+      </header>
+
+      <section id="transcript" class="transcript" aria-live="polite">
+        <div class="empty" id="empty-state">
+          <div class="empty-mark">F</div>
+          <h2>What should we build?</h2>
+          <p>Filament runs a real agent loop. It inspects the workspace, edits precisely, runs commands, and spawns subagents with their own context windows.</p>
+          <div class="chips">
+            <button class="chip" data-prompt="Explain this project's structure and its main entry points.">Explain this project</button>
+            <button class="chip" data-prompt="Find the test suite and run it. Fix any failures.">Run and fix tests</button>
+            <button class="chip" data-prompt="Review the code for bugs and risky edge cases, then fix the clear issues.">Review for bugs</button>
+          </div>
+        </div>
+      </section>
+
+      <form id="composer" class="composer">
+        <textarea id="message" rows="1" placeholder="Describe a task. Enter to send, Shift+Enter for a new line." autocomplete="off"></textarea>
+        <div class="composer-row">
+          <span id="hint" class="hint">The agent reads, edits, runs commands, and delegates.</span>
+          <button type="submit" id="send" class="send">Send</button>
+        </div>
+      </form>
+    </main>
+
+    <aside class="inspector">
+      <div class="panel">
+        <div class="panel-head"><span>Context</span><span id="context-value">0%</span></div>
+        <div class="meter"><div id="context-bar"></div></div>
+        <div class="panel-sub" id="context-detail">0 / 0 tokens</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Plan</span><span id="todo-count">0</span></div>
+        <div id="todo-list" class="todo-list"><div class="muted small">No todos yet</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Subagents</span><span id="subagent-count">0</span></div>
+        <div id="subagent-list" class="subagent-list"><div class="muted small">None running</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Changed files</span></div>
+        <div id="file-list" class="file-list"><div class="muted small">None</div></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="settings-title">Settings</h2>
+        <button id="settings-close" class="icon-btn" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="form-grid">
+        <label>Provider
+          <select id="cfg-kind">
+            <option value="auto">auto</option>
+            <option value="mock">mock</option>
+            <option value="ollama">ollama</option>
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+          </select>
+        </label>
+        <label>Model<input id="cfg-model" type="text" /></label>
+        <label class="wide">Base URL<input id="cfg-base-url" type="text" placeholder="provider default" /></label>
+        <label class="wide">API key<input id="cfg-api-key" type="password" placeholder="leave blank to keep the saved key" /></label>
+        <label>Request timeout (s)<input id="cfg-timeout" type="number" min="1" /></label>
+        <label>Max output tokens<input id="cfg-max-output" type="number" min="64" /></label>
+        <label>Context budget<input id="cfg-max-tokens" type="number" min="1024" /></label>
+        <label>Max agent steps<input id="cfg-max-steps" type="number" min="1" /></label>
+        <label>Subagent tokens<input id="cfg-subagent-tokens" type="number" min="1024" /></label>
+        <label>Subagent steps<input id="cfg-subagent-steps" type="number" min="1" /></label>
+        <label class="check"><input id="cfg-stream" type="checkbox" /> Stream responses</label>
+        <label class="check"><input id="cfg-llm-compact" type="checkbox" /> Summarize context with the model</label>
+      </div>
+      <div class="modal-foot">
+        <span id="settings-error" class="error-text"></span>
+        <button id="settings-save" class="send" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
   <script src="app.js"></script>
 </body>
 </html>

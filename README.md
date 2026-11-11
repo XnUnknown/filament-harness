@@ -1,62 +1,76 @@
 # Filament Harness
 
-Lightweight coding harness for local LLMs. Keeps context small by spawning focused agents
-per task, appending their output in batches, and reviewing only targeted file regions.
+An agentic coding harness for local and hosted LLMs. Filament runs a real
+tool-calling loop, keeps a bounded context window, and gives every subagent its
+own session and transcript. It ships with a terminal UI, an interactive CLI, and
+an Electron desktop app.
 
 Python 3.11+.
+
+## What it does
+
+- **Agent loop** — think, call tools, observe results, repeat, until the task is
+  finished, the agent asks a question, you cancel, or a step limit is reached.
+- **Flexible tools** — read, exact edit, multi-edit, write, glob, grep, shell,
+  Python syntax check, todo list, user questions, subagents, and an explicit
+  `finish`.
+- **Subagent sessions** — each subagent has its own message history, budget, and
+  session file. It returns a summary to the parent, and the parent decides what
+  to do next.
+- **Bounded context** — large tool results are offloaded, old tool output is
+  pruned, and old turns are compacted into a dense summary at a safe turn
+  boundary.
+- **Questions, not guesses** — the `ask_user` tool pauses the loop and resumes
+  when the user answers, with a native question card in the UI.
+- **Streaming** — OpenAI-compatible, Anthropic, and Ollama responses stream to
+  the UI with tool-call fragments assembled across chunks.
+- **Plan mode** — read-only exploration and a concrete plan before any writes.
 
 ## Quickstart
 
 ```bash
 pip install -e .
-filament run examples/demo_tasks.json --client mock
+filament
 ```
 
-Example task file:
+`filament` with no subcommand starts the interactive agent in the current
+directory. Use `--client mock` for an offline smoke test:
 
-```json
-{
-  "tasks": [
-    "Write a Python function named add(a, b) that returns a + b.",
-    {
-      "id": "math",
-      "task": "Implement math helpers",
-      "subtasks": [
-        "Write a Python function named mul(a, b) that returns a * b.",
-        "Write a Python function named sub(a, b) that returns a - b."
-      ],
-      "target": "examples/math.py"
-    }
-  ],
-  "target": "examples/generated.py"
-}
+```bash
+filament --client mock
 ```
 
-## Concepts
+Configure a provider in `filament.toml`:
 
-- Orchestrator: expands tasks/subtasks, enforces token budget, runs agents in parallel.
-- Agent: receives one exact task; returns only requested code.
-- Tools: `run_shell`, `spawn_agent(task)`.
-- Context budget: enforced near 120k tokens (approx., 4 chars/token) with safety margin.
-- Writes: append batch after all agents finish; fixes apply by exact line number.
-- Security: target paths must stay inside the working root unless explicitly allowed.
-- Tool arguments: `run_shell` accepts only positive timeouts (default `timeout_shell`, capped at 86400s) and `read_file` only positive `max_chars`; invalid values raise `ValueError` before reaching `subprocess` or slicing. `max_fixes` must be null or a non-negative integer.
-- Provider transport: HTTP response bodies are capped at 8 MiB (`MAX_RESPONSE_BYTES`) and provider error text at 64 KiB; larger bodies raise `RuntimeError` before JSON decoding. `[llm].timeout` must be a whole number of seconds between 1 and 86400.
+```toml
+[llm]
+kind = "ollama"          # auto | mock | ollama | openai | anthropic
+model = "qwen2.5-coder:7b"
+base_url = "http://localhost:11434"
+stream = true
+```
 
-## Providers
+Or use environment variables: `FILAMENT_CLIENT`, `FILAMENT_MODEL`,
+`FILAMENT_OLLAMA_URL`, `FILAMENT_API_KEY`, `FILAMENT_MAX_TOKENS`.
 
-Filament supports:
+Hosted OpenAI and Anthropic endpoints require an API key. Localhost and
+loopback endpoints are exempt so LM Studio, vLLM, and local Ollama work without
+one.
 
-- `mock` for offline tests
-- `ollama` for local Ollama
-- `openai` for OpenAI and OpenAI-compatible endpoints (Groq, Together, vLLM, LM Studio, etc.)
-- `anthropic` for Anthropic Messages API
+## Interfaces
 
-Use `--client openai --model ...` with `FILAMENT_API_KEY`, or configure `[llm]` in TOML. Ollama cloud endpoints may use either `FILAMENT_API_KEY` or `OLLAMA_API_KEY`.
+### Interactive CLI
 
-## TUI
+```bash
+filament
+filament --mode plan
+filament --shell-cwd ../my-project
+```
 
-Start the interactive terminal UI:
+Commands: `/new`, `/sessions`, `/load <id>`, `/mode build|plan`, `/compress`,
+`/todos`, `/context`, `/help`, `/quit`.
+
+### Terminal UI
 
 ```bash
 filament tui
@@ -64,56 +78,186 @@ filament tui
 filament-tui
 ```
 
-The TUI supports provider/settings/context/execution/path/run configuration, task
-management, config save/load, and running the harness with live result output.
+The TUI keeps the settings menus (provider, context, execution, paths) and adds
+the same agent chat screen as the CLI.
 
-## Electron backend
+### Electron app
 
-`python -m filament.backend_server` is the newline-delimited JSON backend used by
-the Electron app. Each request is one UTF-8 JSON object per line; each response is
-one line, either `{"id": ..., "ok": true, "result": ...}` or
-`{"id": ..., "ok": false, "error": "..."}`. Request lines are capped at 1 MiB
-(`MAX_REQUEST_LINE_BYTES`); a malformed, non-object, or oversized request gets an
-error response and the session keeps running.
+```bash
+cd electron
+npm install
+npm start
+```
 
-`ping` returns the package version. `set_config` validates a copy of the live
-config before publishing it: unknown keys and wrong JSON types are rejected, a
-failed update leaves the previous config in place, and a successful update rebuilds
-the LLM client and toolset so provider changes take effect.
+The desktop app shows streaming assistant text, collapsible tool cards, nested
+subagent transcripts, the plan, a context meter, changed files, session history,
+question cards, build/plan modes, and a settings panel. It supports a dark and a
+light theme.
+
+`FILAMENT_PYTHON` selects the Python interpreter used for the backend.
+
+### JSON backend
+
+`python -m filament.backend_server` speaks one JSON object per line:
+
+```json
+{"id": 1, "method": "chat", "params": {"message": "fix the tests", "mode": "build"}}
+{"id": 1, "ok": true, "result": {"status": "done", "content": "..."}}
+```
+
+While a turn runs, the backend streams notifications with an `event` key and no
+request id:
+
+```json
+{"event": "delta", "session_id": "...", "text": "Running the suite."}
+{"event": "tool_start", "session_id": "...", "id": "call_1", "name": "run_shell", "args": {"command": "pytest"}}
+```
+
+`chat` and `answer` run on worker threads, so `cancel` and other requests are
+handled while the agent is working.
+
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `read_file` | Line-numbered read with offset/limit and a next-offset footer |
+| `write_file` | Create a file or replace its full contents |
+| `edit_file` | Exact string replacement, unique by default, whitespace-normalized fallback |
+| `multi_edit` | Several exact edits to one file in a single atomic write |
+| `list_dir` | Directory listing with sizes and ignored directories removed |
+| `glob` | Find files by glob pattern, newest first |
+| `grep` | Regex content search with context, file globs, and limits |
+| `run_shell` | Command execution with timeout, allowlist, and output offload |
+| `check_python` | Compile a Python file without running it |
+| `todo_write` | Maintain the visible plan; one item in progress at a time |
+| `ask_user` | Pause the loop and wait for a human decision |
+| `spawn_agent` | Run one subagent with its own session and return its summary |
+| `spawn_agents` | Run several subagents in parallel |
+| `finish` | End the run with a summary of what changed and how it was verified |
+
+Every path is confined to the workspace unless `allow_outside_target` is set.
+
+## Subagents
+
+A subagent is a full second `AgentLoop`:
+
+- new session file under `.filament/sessions` with `kind = "subagent"` and a
+  `parent_id`;
+- its own message history and `subagent_max_tokens` budget;
+- no `ask_user` tool and no further nesting by default (`max_depth = 1`);
+- its final answer becomes an ordinary tool result in the parent's transcript,
+  and the parent continues its loop.
+
+The Electron UI renders the child's events inside a collapsible subagent card,
+so you can watch both agents work without mixing their context.
+
+## Context management
+
+- Tokens are estimated as characters divided by `chars_per_token` (default 4).
+- Tool results over `tool_output_limit` characters are saved under
+  `.filament/runs` and replaced with a head/tail excerpt.
+- Before a model call, context above `compact_threshold` is pruned and then
+  compacted. Compaction only cuts at a user turn, never between an assistant
+  tool call and its result, and replaces old turns with a summary.
+- If `compact_with_llm` is enabled, the summary is written by the model; if that
+  call fails, a deterministic digest is used.
 
 ## Configuration
 
-Copy `filament.toml.example` to `filament.toml` or pass `--config`.
+Copy `filament.toml.example` to `filament.toml`.
 
-Important settings:
+| Setting | Default | Purpose |
+|---|---|---|
+| `max_tokens` | `120000` | Context budget |
+| `budget_margin` | `0.05` | Reserved headroom |
+| `chars_per_token` | `4` | Token estimate |
+| `max_steps` | `40` | Main agent loop limit |
+| `subagent_max_steps` | `24` | Subagent loop limit |
+| `subagent_max_tokens` | `32000` | Subagent context budget |
+| `max_depth` | `1` | Subagent nesting limit |
+| `tool_output_limit` | `12000` | Chars kept inline per tool result |
+| `keep_recent_messages` | `8` | Recent messages preserved during compaction |
+| `compact_threshold` | `0.75` | Fraction of the budget that triggers compaction |
+| `compact_with_llm` | `true` | Use the model to summarize old turns |
+| `timeout_shell` | `60` | Shell timeout in seconds |
+| `max_shell_output` | `20000` | Inline shell output before offload |
+| `use_shell` | `true` | Use shell mode; `false` splits commands into argv |
+| `allow_outside_target` | `false` | Permit paths outside the workspace |
+| `atomic_writes` | `true` | Write via temp file and atomic replace |
+| `offload_shell_output` | `true` | Save large output under `.filament/runs` |
+| `command_allowlist` | `[]` | Optional command prefixes |
+| `llm.kind` | `auto` | `auto`, `mock`, `ollama`, `openai`, `anthropic` |
+| `llm.model` | `llama3.2` | Model name |
+| `llm.base_url` | provider default | API base URL |
+| `llm.timeout` | `120` | Request timeout in seconds |
+| `llm.stream` | `true` | Stream responses |
+| `llm.max_output_tokens` | `4096` | Per-response output cap |
+| `llm.reasoning_effort` | unset | `low`, `medium`, or `high` where supported |
 
-- `max_tokens`: total token budget (default 120000)
-- `budget_margin`: reserved margin (default 0.05)
-- `workers`: parallel agent count
-- `timeout_shell`: shell timeout
-- `allow_outside_target`: allow writing outside working root
-- `atomic_writes`: write complete files via temp file and atomic replace when enabled
-- `use_shell`: use shell mode for `run_shell`. When `false`, the command is split
-  into an argument list with platform-aware quoting, so native Windows paths keep
-  their backslashes; both the agent toolset and the chat/TUI toolbox use the same
-  splitter (`filament/shell.py`).
-- `offload_shell_output`: save oversized `run_shell` output under `.filament/runs` and return its path
-- `command_allowlist`: optional command prefixes
-- `[llm]`: `kind`, `model`, `base_url`, `timeout` (seconds, default 120)
+Configuration is type-checked on load. A quoted `"false"` is rejected rather
+than treated as true, and every bad key is reported in one error.
 
-Config values are type-checked when the file loads: numbers must be numbers, booleans
-must be `true` or `false`, and `[llm]` must be a table. A quoted `"false"` is rejected
-instead of acting like `true`, so a typo cannot silently enable `allow_outside_target`.
-Every bad top-level key is listed in one `ValueError`, for example
-`config error: invalid configuration: max_tokens must be an integer, got str '120000'`.
-Whole floats such as `120000.0` are accepted for integer settings; fractional values
-are rejected outside float settings such as `budget_margin`.
+## Legacy batch mode
 
-Environment overrides: `FILAMENT_CLIENT`, `FILAMENT_MODEL`, `FILAMENT_OLLAMA_URL`,
-`FILAMENT_MAX_TOKENS`, `FILAMENT_WORKERS`, `FILAMENT_TIMEOUT_SHELL`, `FILAMENT_TIMEOUT`, `FILAMENT_USE_OLLAMA`.
+The original one-shot task runner is still available for scripted jobs:
+
+```bash
+filament run examples/demo_tasks.json --client mock
+```
+
+It spawns one completion per task, appends the extracted code in a batch, and
+optionally runs a line-level review pass. New work should use the agent loop.
 
 ## Testing
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover -s tests -v
 ```
+
+The suite covers the agent loop, tool safety, exact editing, subagent sessions,
+question pause/resume, compaction boundaries, streaming parsers for all three
+providers, the backend event protocol, configuration validation, and the legacy
+batch path.
+
+## Project layout
+
+```text
+filament/
+  agent_loop.py     agent state machine, subagents, events
+  toolkit.py        workspace-scoped tools
+  compaction.py     token estimates, pruning, summaries
+  stream.py         SSE / NDJSON parsing and tool-call assembly
+  llm.py            mock, Ollama, OpenAI-compatible, Anthropic clients
+  chat.py           persistent chat session wrapper
+  session.py        session persistence and parent links
+  backend_server.py JSON backend for Electron
+  console.py        terminal event renderer
+  cli.py            command line entry point
+  tui.py            terminal menus and chat
+  config.py         configuration and validation
+  orchestrator.py   legacy batch runner
+electron/
+  main.js           window, backend process, IPC
+  preload.js        narrow contextBridge API
+  renderer/         event-driven UI
+tests/
+```
+
+## Security notes
+
+- The agent can only touch paths inside the workspace unless explicitly allowed.
+- Shell commands can be restricted with `command_allowlist`.
+- The Electron renderer runs with `contextIsolation`, no Node integration, and a
+  narrow preload API; the backend is a separate process.
+- API keys are read from configuration or environment and are never written to
+  session files.
+
+## Limitations
+
+- Token counts are character-based estimates, not tokenizer output.
+- Local models vary in tool-calling quality; the JSON action fallback helps but
+  is not a substitute for a model with native tool support.
+- Compaction is lossy by design. Keep important decisions in the conversation or
+  in files.
+- The harness is not a sandbox. Review the workspace and the allowlist before
+  running untrusted prompts.
