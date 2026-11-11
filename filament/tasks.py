@@ -30,8 +30,11 @@ def _coerce_task(raw: Any, index: int, parent: str = "", inherited_target: str |
     else:
         target = str(target).strip() or inherited_target
     enabled = bool(raw.get("enabled", True))
+    raw_children = raw.get("subtasks", []) or []
+    if not isinstance(raw_children, list):
+        raise ValueError(f"task {index + 1} subtasks must be a list")
     children = []
-    for child_index, child in enumerate(raw.get("subtasks", []) or []):
+    for child_index, child in enumerate(raw_children):
         children.append(_coerce_task(child, child_index, f"{task_id}.", inherited_target=target))
     return TaskSpec(id=task_id, instruction=instruction, target=target, subtasks=children, enabled=enabled)
 

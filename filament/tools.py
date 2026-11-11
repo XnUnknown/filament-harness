@@ -1,6 +1,7 @@
 """Tools available to agents: run_shell and spawn_agent."""
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import threading
@@ -66,7 +67,7 @@ class Toolset:
                 )
             else:
                 proc = subprocess.run(
-                    shlex.split(command),
+                    _split_command(command),
                     cwd=str(cwd_path),
                     capture_output=True,
                     text=True,
@@ -134,6 +135,22 @@ class Toolset:
         result = self.client.generate(prompt, system=system or CODING_SYSTEM)
         self.budget.add(f"result:{result}")
         return result
+
+
+def _split_command(command: str) -> list[str]:
+    """Split a command for shell=False while preserving native path separators."""
+    if os.name != "nt":
+        return shlex.split(command)
+    # POSIX-mode shlex treats backslashes as escapes, which mangles Windows
+    # paths such as C:\\Users\\name. Non-POSIX mode keeps them but retains
+    # one layer of surrounding quotes, so strip that layer afterwards.
+    parts = shlex.split(command, posix=False)
+    cleaned: list[str] = []
+    for part in parts:
+        if len(part) >= 2 and part[0] == part[-1] and part[0] in {'"', "'"}:
+            part = part[1:-1]
+        cleaned.append(part)
+    return cleaned
 
 
 def _truncate(text: str, limit: int) -> str:
