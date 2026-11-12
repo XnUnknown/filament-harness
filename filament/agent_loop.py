@@ -357,6 +357,10 @@ class AgentLoop:
                 fallback = self._parse_fallback(content)
                 if fallback is not None:
                     calls = [fallback]
+                else:
+                    answer = self._fallback_final(content)
+                    if answer is not None:
+                        content = answer
 
             assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
             if calls:
@@ -570,8 +574,8 @@ class AgentLoop:
             self._stream_parts.append(text)
             self._emit("delta", text=text)
 
-    def _parse_fallback(self, content: str) -> ToolCall | None:
-        """Accept a single JSON action from models without native tool calling."""
+    def _parse_action(self, content: str) -> dict[str, Any] | None:
+        """Decode the single JSON object a fallback reply may contain."""
         text = content.strip()
         if text.startswith("```"):
             lines = text.splitlines()
@@ -586,7 +590,12 @@ class AgentLoop:
             data, _ = json.JSONDecoder().raw_decode(text)
         except (json.JSONDecodeError, ValueError):
             return None
-        if not isinstance(data, dict):
+        return data if isinstance(data, dict) else None
+
+    def _parse_fallback(self, content: str) -> ToolCall | None:
+        """Accept a single JSON action from models without native tool calling."""
+        data = self._parse_action(content)
+        if data is None:
             return None
         if "final" in data and not any(key in data for key in ("tool", "name", "action")):
             return None
@@ -604,6 +613,21 @@ class AgentLoop:
         if not isinstance(arguments, dict):
             return None
         return ToolCall(id=f"call_{int(time.time() * 1000)}", name=name.strip(), arguments=arguments)
+
+    def _fallback_final(self, content: str) -> str | None:
+        """Return the answer carried by a ``{"final": ...}`` reply.
+
+        The system prompt tells models without native tool calling to answer
+        that way, so the JSON envelope must be unwrapped: showing the user raw
+        ``{"final": "..."}`` JSON reads like a broken agent.
+        """
+        data = self._parse_action(content)
+        if data is None:
+            return None
+        if any(key in data for key in ("tool", "name", "action")):
+            return None
+        value = data.get("final")
+        return value if isinstance(value, str) else None
 
     @staticmethod
     def _signature(calls: list[ToolCall]) -> str:
@@ -666,7 +690,23 @@ class AgentLoop:
             if not isinstance(raw_calls, list) or not raw_calls:
                 index += 1
                 continue
-            calls = [call for call in raw_calls if isinstance(call, dict)]
+            calls: list[dict[str, Any]] = []
+            for call in raw_calls:
+                if not isinstance(call, dict):
+                    continue
+                name = call.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    # Every provider adapter drops a call with no name.  Pairing
+                    # a result for it would put a tool message on the wire with
+                    # no call in front of it, which the provider rejects.
+                    continue
+                calls.append(call)
+            if len(calls) != len(raw_calls):
+                repaired += 1
+                if calls:
+                    message["tool_calls"] = calls
+                else:
+                    message.pop("tool_calls", None)
             wanted: list[str] = []
             for position, call in enumerate(calls, 1):
                 call_id = str(call.get("id") or "")

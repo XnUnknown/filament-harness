@@ -148,5 +148,62 @@ class ToolkitLineEndingTest(unittest.TestCase):
         self.assertEqual(path.read_bytes(), b"print(1)\n")
 
 
+class TestFuzzyEditPrecision(unittest.TestCase):
+    """The whitespace-tolerant fallback must not rewrite unrelated lines."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.registry = ToolRegistry(self.root, HarnessConfig())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write(self, name, text):
+        path = self.root / name
+        path.write_text(text, encoding="utf-8", newline="")
+        return path
+
+    def test_fuzzy_edit_keeps_trailing_whitespace_on_untouched_lines(self):
+        path = self.write("a.py", "alpha   \nbeta\ngamma\t\n")
+        out = self.registry.execute(
+            "edit_file",
+            {"path": "a.py", "old_string": "alpha\nbeta", "new_string": "alpha\nBETA"},
+        )
+        self.assertIn("matched after normalizing", out)
+        self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nBETA\ngamma\t\n")
+
+    def test_fuzzy_edit_on_a_crlf_file_keeps_crlf(self):
+        path = self.write("win.py", "one   \r\ntwo\r\nthree\r\n")
+        self.registry.execute(
+            "edit_file", {"path": "win.py", "old_string": "one\ntwo", "new_string": "one\nTWO"}
+        )
+        self.assertEqual(path.read_bytes(), b"one\r\nTWO\r\nthree\r\n")
+
+    def test_fuzzy_edit_requires_replace_all_for_repeated_matches(self):
+        self.write("a.py", "v\nv\n")
+        with self.assertRaises(ToolError):
+            self.registry.execute(
+                "edit_file", {"path": "a.py", "old_string": "v ", "new_string": "w"}
+            )
+
+    def test_fuzzy_edit_replace_all_counts_every_match(self):
+        path = self.write("a.py", "v\nv\n")
+        out = self.registry.execute(
+            "edit_file",
+            {"path": "a.py", "old_string": "v ", "new_string": "w", "replace_all": True},
+        )
+        self.assertIn("2+ replacement", out)
+        self.assertEqual(path.read_text(encoding="utf-8"), "w\nw\n")
+
+    def test_whitespace_only_old_string_is_rejected(self):
+        path = self.write("a.py", "alpha\nbeta\n")
+        with self.assertRaises(ToolError):
+            self.registry.execute(
+                "edit_file", {"path": "a.py", "old_string": "   ", "new_string": "x"}
+            )
+        self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\n")
+
+
 if __name__ == "__main__":
     unittest.main()

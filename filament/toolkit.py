@@ -171,6 +171,20 @@ def _count_occurrences(haystack: str, needle: str) -> int:
     return haystack.count(needle)
 
 
+def _whitespace_tolerant_pattern(needle: str) -> re.Pattern[str]:
+    """Compile a needle that matches in raw file text ignoring trailing spaces.
+
+    Models copy text out of a numbered read, so they routinely drop trailing
+    whitespace or the CR in a CRLF file.  Matching line by line against the
+    original text keeps the rest of the file byte-identical; normalizing the
+    whole file instead would strip every other line's trailing whitespace and
+    turn a one-line edit into a whole-file diff.
+    """
+    lines = _normalize_text(needle).split("\n")
+    body = r"[ \t]*\r?\n".join(re.escape(line) + r"[ \t]*" for line in lines)
+    return re.compile(body)
+
+
 def _match_lines(text: str, needle: str, limit: int = 6) -> list[int]:
     lines: list[int] = []
     for index, line in enumerate(text.splitlines(), 1):
@@ -645,7 +659,8 @@ class ToolRegistry:
         new: str,
         replace_all: bool,
         label: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, int]:
+        """Return ``(text, note, replacements)`` after replacing ``old``."""
         if not old:
             raise ToolError(f"{label}: old_string must not be empty")
         if old == new:
@@ -654,6 +669,28 @@ class ToolRegistry:
         note = ""
         if count == 0:
             # Fuzzy fallback: models often drop trailing whitespace or CRLF.
+            if not _normalize_text(old):
+                raise ToolError(f"{label}: old_string must not be empty")
+            pattern = _whitespace_tolerant_pattern(old)
+            matches = list(pattern.finditer(text))
+            if matches:
+                if len(matches) > 1 and not replace_all:
+                    lines = _match_lines(text, _normalize_text(old))
+                    raise ToolError(
+                        f"{label}: old_string matches {len(matches)} places (lines {lines}); "
+                        "include more context or set replace_all"
+                    )
+                replacement = _normalize_text(new)
+                replaced = pattern.sub(
+                    lambda _match: replacement,
+                    text,
+                    count=0 if replace_all else 1,
+                )
+                return replaced, " (matched after normalizing trailing whitespace)", (
+                    len(matches) if replace_all else 1
+                )
+            # Last resort: unusual separators (a lone CR) defeat the pattern, so
+            # normalize the whole text rather than refuse a legitimate edit.
             normalized_text = _normalize_text(text)
             normalized_old = _normalize_text(old)
             normalized_new = _normalize_text(new)
@@ -668,10 +705,17 @@ class ToolRegistry:
                     f"{label}: old_string matches {fuzzy} places (lines {lines}); "
                     "include more context or set replace_all"
                 )
-            text = normalized_text
-            old, new = normalized_old, normalized_new
-            count = fuzzy
-            note = " (matched after normalizing line endings/whitespace)"
+            if replace_all:
+                return (
+                    normalized_text.replace(normalized_old, normalized_new),
+                    " (matched after normalizing line endings/whitespace)",
+                    fuzzy,
+                )
+            return (
+                normalized_text.replace(normalized_old, normalized_new, 1),
+                " (matched after normalizing line endings/whitespace)",
+                1,
+            )
         if count > 1 and not replace_all:
             lines = _match_lines(text, old)
             raise ToolError(
@@ -679,7 +723,7 @@ class ToolRegistry:
                 "include more context or set replace_all"
             )
         replaced = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-        return replaced, note
+        return replaced, note, count if replace_all else 1
 
     def _edit_file(self, args: dict[str, Any], _call_id: str) -> str:
         target = self._resolve(args.get("path"))
@@ -693,14 +737,18 @@ class ToolRegistry:
             raise ToolError("new_string must be a string")
         replace_all = _arg_bool(args, "replace_all")
         before = target.read_text(encoding="utf-8", errors="replace")
-        after, note = self._replace(before, old, new, replace_all, self._rel(target))
+        after, note, replacements = self._replace(
+            before, old, new, replace_all, self._rel(target)
+        )
         if after == before:
             return f"no change to {self._rel(target)}"
         self._write_text(target, after, newline=self._newline_style(target), final_newline=False)
         self._note_change(target)
         diff = _unified_diff(self._rel(target), before, after)
-        count = before.count(old) if old in before else 1
-        return f"edited {self._rel(target)} ({count}{'+' if replace_all else ''} replacement{note})\n{diff}".rstrip()
+        return (
+            f"edited {self._rel(target)} ({replacements}{'+' if replace_all else ''} "
+            f"replacement{note})\n{diff}"
+        ).rstrip()
 
     def _multi_edit(self, args: dict[str, Any], _call_id: str) -> str:
         target = self._resolve(args.get("path"))
@@ -722,7 +770,7 @@ class ToolRegistry:
                 raise ToolError(f"edit {index}: old_string must be a non-empty string")
             if not isinstance(new, str):
                 raise ToolError(f"edit {index}: new_string must be a string")
-            working, _ = self._replace(
+            working, _, _ = self._replace(
                 working,
                 old,
                 new,

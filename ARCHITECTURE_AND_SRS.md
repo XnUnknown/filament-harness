@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.4.
+Version 0.5.5.
 
 ## 1. Purpose
 
@@ -114,6 +114,11 @@ unless `allow_outside_target` is set.
 Tool results are clipped at `tool_output_limit`; the full text is saved under
 `.filament/runs` and the excerpt names the saved file.
 
+`edit_file` and `multi_edit` replace the exact text first. Only when that fails
+does a whitespace-tolerant pattern run against the original file, so a model
+that dropped trailing spaces still gets its edit without the harness rewriting
+unrelated lines. The file's dominant line ending is preserved on write.
+
 ## 5. Subagents
 
 `spawn_agent(task, system?)` creates a new `Session` with:
@@ -183,6 +188,12 @@ are normalized: non-object messages, unknown roles, tool results without an id,
 and pending questions that cannot be answered are dropped, so one corrupt file
 cannot break the session list or the next turn.
 
+Before the next model call the loop repairs pairing in both directions: a tool
+call with no result gets an explicit "not executed" result, and a tool result
+with no call, a duplicate result, or a call with no tool name is dropped. A
+nameless call matters because the provider adapters skip it, so keeping its
+result would put an orphan `tool` message on the wire.
+
 ## 8. Providers and Streaming
 
 Neutral message format:
@@ -203,7 +214,9 @@ Adapters:
 
 If a local model returns no native tool calls but emits a single JSON object
 such as `{"tool": "read_file", "arguments": {...}}`, the loop accepts it as one
-action and continues. This is a fallback, not the primary path.
+action and continues. This is a fallback, not the primary path. A
+`{"final": "<answer>"}` object is unwrapped into plain text so the JSON
+envelope never reaches the user; any other object is reported verbatim.
 
 Responses are read through a bounded reader (8 MiB), and error bodies are
 truncated to 64 KiB before being included in an exception.

@@ -6,7 +6,7 @@ from pathlib import Path
 from filament.agent_loop import AgentLoop
 from filament.chat import ChatOrchestrator
 from filament.config import HarnessConfig
-from filament.llm import ChatResult, MockLLM, ToolCall
+from filament.llm import ChatResult, MockLLM, ToolCall, _anthropic_messages, _openai_message
 from filament.session import create_session
 
 
@@ -134,6 +134,82 @@ class TestOrphanToolResults(unittest.TestCase):
         self.assertEqual(tool_ids, ["a"])
         tool_messages = [m for m in sent if m.get("role") == "tool"]
         self.assertEqual(tool_messages[0]["content"], "good")
+
+
+class TestNamelessToolCallInSession(unittest.TestCase):
+    """A call the adapters drop must not leave an orphan result on the wire."""
+
+    def test_nameless_call_and_its_result_never_reach_the_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = create_session(root)
+            session.messages = [
+                {"role": "user", "content": "start"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "x1", "arguments": {}}],
+                },
+                {"role": "tool", "tool_call_id": "x1", "name": "", "content": "did something"},
+            ]
+            client = MockLLM([{"content": "ok"}])
+            loop = AgentLoop(HarnessConfig(compact_with_llm=False), root, session, client=client)
+
+            result = loop.run("continue")
+
+            self.assertEqual(result.status, "done", result)
+            wire = [_openai_message(message) for message in client.requests[0]]
+            issued = {
+                str(call.get("id"))
+                for message in wire
+                if message.get("role") == "assistant"
+                for call in (message.get("tool_calls") or [])
+            }
+            tool_ids = [m["tool_call_id"] for m in wire if m.get("role") == "tool"]
+            self.assertEqual([tool_id for tool_id in tool_ids if tool_id not in issued], [])
+
+            _system, conversation = _anthropic_messages(loop.messages)
+            tool_use_ids = {
+                block["id"]
+                for turn in conversation
+                if turn["role"] == "assistant"
+                for block in turn["content"]
+                if block.get("type") == "tool_use"
+            }
+            result_ids = {
+                block["tool_use_id"]
+                for turn in conversation
+                for block in turn["content"]
+                if block.get("type") == "tool_result"
+            }
+            self.assertEqual(result_ids - tool_use_ids, set())
+
+
+class TestFallbackFinalReply(unittest.TestCase):
+    """The prompt's ``{"final": ...}`` envelope must not reach the user raw."""
+
+    def reply(self, content):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = MockLLM([{"content": content}])
+            loop = AgentLoop(
+                HarnessConfig(compact_with_llm=False), root, create_session(root), client=client
+            )
+            return loop.run("answer me")
+
+    def test_final_json_is_unwrapped(self):
+        result = self.reply('{"final": "The answer is forty-two."}')
+        self.assertEqual(result.status, "done")
+        self.assertEqual(result.content, "The answer is forty-two.")
+
+    def test_fenced_final_json_is_unwrapped(self):
+        result = self.reply('```json\n{"final": "Fenced answer"}\n```')
+        self.assertEqual(result.content, "Fenced answer")
+
+    def test_plain_json_answer_is_still_reported_verbatim(self):
+        raw = '{"name": "package", "version": "1.0"}'
+        result = self.reply(raw)
+        self.assertEqual(result.content, raw)
 
 
 if __name__ == "__main__":
