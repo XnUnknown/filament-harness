@@ -8,7 +8,7 @@ from filament.agent_loop import AgentLoop
 from filament.chat import ChatOrchestrator
 from filament.config import HarnessConfig
 from filament.llm import ChatResult, MockLLM, ToolCall
-from filament.session import Session, create_session, list_sessions, load_session
+from filament.session import Session, create_session, list_sessions, load_session, save_session
 
 
 def scripted(*items):
@@ -424,6 +424,88 @@ class TestToolPairingRepair(AgentLoopTestCase):
         tool_messages = [message for message in chat.messages if message.get("role") == "tool"]
         self.assertEqual(len(tool_messages), 1)
         self.assertNotIn("Not executed", tool_messages[0]["content"])
+
+    def test_answer_without_its_question_call_is_sent_as_a_new_request(self):
+        # A saved session can name a pending question whose assistant turn is
+        # gone. Appending the answer as a tool message would be an orphan call
+        # id that every provider rejects, so it must become a user message.
+        session = create_session(self.root)
+        session.messages = [{"role": "user", "content": "start"}]
+        session.pending_question = {
+            "id": "q_missing",
+            "tool_call_id": "call_missing",
+            "question": "Which?",
+            "options": [],
+        }
+        client = MockLLM([{"content": "continuing"}])
+        loop = AgentLoop(HarnessConfig(), self.root, session, client=client)
+        result = loop.resume("blue")
+        self.assertEqual(result.status, "done")
+        sent = client.requests[0]
+        self.assertNotIn("call_missing", [m.get("tool_call_id") for m in sent if m.get("role") == "tool"])
+        self.assertEqual([m["role"] for m in sent], ["system", "user", "user"])
+        self.assertEqual(sent[-1]["content"], "blue")
+
+
+class TestCorruptSessionFiles(AgentLoopTestCase):
+    def _save(self, **fields):
+        session = create_session(self.root)
+        for key, value in fields.items():
+            setattr(session, key, value)
+        save_session(session, self.root)
+        return session
+
+    def test_non_list_messages_do_not_break_listing_or_loading(self):
+        session = self._save(messages="not a list")
+        sessions = list_sessions(self.root)
+        self.assertEqual([item.session_id for item in sessions], [session.session_id])
+        self.assertEqual(sessions[0].display_title, session.session_id)
+
+        loaded = load_session(session.session_id, self.root)
+        self.assertEqual(loaded.messages, [])
+        loop = AgentLoop(HarnessConfig(), self.root, loaded, client=MockLLM())
+        self.assertEqual([message["role"] for message in loop.messages], ["system"])
+
+    def test_junk_entries_and_wrong_container_types_are_dropped(self):
+        session = self._save(
+            messages=[
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                "junk",
+                7,
+                None,
+                {"content": "no role"},
+                {"role": "unknown", "content": "x"},
+                {"role": "tool", "content": "no call id"},
+            ],
+            files_changed="a.txt",
+            todos=["not a todo", {"content": "work", "status": "pending"}],
+            child_sessions={"a": 1},
+            usage="nope",
+        )
+        # save_session refreshes updated_at, so corrupt the JSON afterwards to
+        # prove a non-numeric timestamp cannot break the session list sort.
+        path = self.root / ".filament" / "sessions" / f"{session.session_id}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["updated_at"] = "yesterday"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        sessions = list_sessions(self.root)
+        self.assertEqual(len(sessions), 1)
+        loaded = sessions[0]
+        self.assertEqual([message["role"] for message in loaded.messages], ["user", "assistant"])
+        self.assertEqual(loaded.files_changed, [])
+        self.assertEqual(loaded.todos, [{"content": "work", "status": "pending"}])
+        self.assertEqual(loaded.child_sessions, [])
+        self.assertEqual(loaded.usage, {})
+        self.assertIsInstance(loaded.updated_at, float)
+        self.assertGreaterEqual(loaded.updated_at, 0)
+        self.assertEqual(loaded.session_id, session.session_id)
+
+    def test_unanswerable_pending_question_is_dropped(self):
+        session = self._save(pending_question={"question": "no ids"}, status="awaiting_input")
+        loaded = load_session(session.session_id, self.root)
+        self.assertIsNone(loaded.pending_question)
+        self.assertEqual(loaded.status, "idle")
 
 
 class TestModelFailures(AgentLoopTestCase):

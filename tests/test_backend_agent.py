@@ -102,6 +102,22 @@ class TestBackendChat(BackendAgentTestCase):
         self.assertIn("already running", reply["error"])
         backend_server.STATE["busy"] = False
 
+    def test_session_switch_is_rejected_while_busy(self):
+        backend_server.STATE["busy"] = True
+        try:
+            for method, params in (
+                ("load_session", {"session_id": self.chat.session.session_id}),
+                ("new_session", {}),
+                ("select_workspace", {"path": str(self.root)}),
+            ):
+                reply = self.call(method, params)
+                self.assertFalse(reply["ok"], method)
+                self.assertIn("running", reply["error"], method)
+        finally:
+            backend_server.STATE["busy"] = False
+        # The rejected switch must not have replaced the live session.
+        self.assertIs(backend_server.STATE["chat"], self.chat)
+
     def test_cancel_marks_the_session(self):
         reply = self.call("cancel")
         self.assertTrue(reply["ok"])

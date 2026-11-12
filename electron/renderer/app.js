@@ -572,6 +572,10 @@
     renderFiles(state.files_changed);
     if (state.provider) applyProvider(state.provider);
     S.pendingQuestion = state.pending_question || null;
+    // Recompute the composer from the state we just adopted. Without this, a
+    // session switch after answering left the send button disabled because
+    // only the question card used to clear that flag.
+    setBusy(S.busy);
   }
 
   // -------------------------------------------------------------- turn flow

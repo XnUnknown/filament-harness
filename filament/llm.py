@@ -963,11 +963,10 @@ def _anthropic_messages(
             continue
         # user
         blocks = [{"type": "text", "text": content or "(empty)"}]
-        if (
-            conversation
-            and conversation[-1]["role"] == "user"
-            and all(part.get("type") == "text" for part in conversation[-1]["content"])
-        ):
+        if conversation and conversation[-1]["role"] == "user":
+            # Strict Anthropic-compatible backends reject two user turns in a
+            # row (Bedrock returns 400), so merge instead.  This is also the
+            # path that puts a follow-up question after a tool_result turn.
             conversation[-1]["content"].extend(blocks)
         else:
             conversation.append({"role": "user", "content": blocks})

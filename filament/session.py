@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import time
@@ -9,6 +10,50 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+
+
+def _coerce_timestamp(value: Any, fallback: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if math.isfinite(number) else fallback
+
+
+def _clean_messages(value: Any) -> list[dict[str, Any]]:
+    """Keep only messages a provider can accept.
+
+    Session files can be hand-edited, truncated by a crash, or written by an
+    older version.  One junk entry must not crash ``list_sessions`` or turn
+    into an invalid request on the next turn.
+    """
+    if not isinstance(value, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        if not isinstance(role, str) or role not in _MESSAGE_ROLES:
+            continue
+        if role == "tool" and not str(item.get("tool_call_id") or ""):
+            continue
+        cleaned.append(item)
+    return cleaned
+
+
+def _clean_str_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _clean_dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _safe_session_id(session_id: Any) -> str:
@@ -49,6 +94,32 @@ class Session:
     child_sessions: list[str] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # Fields loaded from disk are untrusted: normalize the containers so a
+        # single malformed file cannot break listing, loading, or a new turn.
+        self.messages = _clean_messages(self.messages)
+        self.files_changed = _clean_str_list(self.files_changed)
+        self.todos = _clean_dict_list(self.todos)
+        self.child_sessions = _clean_str_list(self.child_sessions)
+        if not isinstance(self.usage, dict):
+            self.usage = {}
+        pending_valid = (
+            isinstance(self.pending_question, dict)
+            and bool(str(self.pending_question.get("id") or ""))
+            and bool(str(self.pending_question.get("tool_call_id") or ""))
+        )
+        if not pending_valid:
+            # A question without an id cannot be answered and would leave the
+            # UI with a disabled composer; drop it so the session can continue.
+            if self.pending_question is not None and self.status == "awaiting_input":
+                self.status = "idle"
+            self.pending_question = None
+        if not isinstance(self.title, str):
+            self.title = str(self.title or "")
+        now = time.time()
+        self.created_at = _coerce_timestamp(self.created_at, now)
+        self.updated_at = _coerce_timestamp(self.updated_at, now)
+
     def touch(self) -> None:
         self.updated_at = time.time()
 
@@ -57,6 +128,8 @@ class Session:
         if self.title:
             return self.title
         for message in self.messages:
+            if not isinstance(message, dict):
+                continue
             if message.get("role") == "user":
                 text = str(message.get("content") or "").strip()
                 if text:

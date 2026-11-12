@@ -113,6 +113,13 @@ def _require_chat() -> ChatOrchestrator:
     return chat
 
 
+def _require_idle(action: str) -> None:
+    """Reject a state replacement that a running turn would silently undo."""
+    with _STATE_LOCK:
+        if STATE["busy"]:
+            raise ValueError(f"cannot {action} while an agent turn is running")
+
+
 def _config_to_dict(config: HarnessConfig) -> dict[str, Any]:
     return {
         "max_tokens": config.max_tokens,
@@ -249,6 +256,7 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         return _config_to_dict(config)
 
     if method == "select_workspace":
+        _require_idle("switch workspaces")
         return _load_workspace(params.get("path"))
 
     if method == "get_state":
@@ -284,6 +292,7 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         ]
 
     if method == "load_session":
+        _require_idle("load a session")
         chat = _require_chat()
         chat.load_session(str(params.get("session_id", "")))
         _emit(
@@ -301,6 +310,7 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         }
 
     if method == "new_session":
+        _require_idle("start a new session")
         chat = _require_chat()
         chat.new_session(str(params.get("mode", chat.mode)))
         _emit(

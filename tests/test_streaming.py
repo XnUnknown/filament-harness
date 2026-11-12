@@ -118,7 +118,14 @@ class TestAnthropicStream(unittest.TestCase):
         self.assertEqual(conversation[1]["content"][0]["type"], "tool_use")
         grouped = conversation[2]
         self.assertEqual(grouped["role"], "user")
-        self.assertEqual([block["type"] for block in grouped["content"]], ["tool_result", "tool_result"])
+        # A user message after the tool results must be merged into the same
+        # turn: strict backends reject consecutive user roles.
+        self.assertEqual(
+            [block["type"] for block in grouped["content"]],
+            ["tool_result", "tool_result", "text"],
+        )
+        self.assertEqual(grouped["content"][-1]["text"], "next")
+        self.assertEqual(len(conversation), 3)
 
 
 class TestOpenAIMessageConversion(unittest.TestCase):

@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.3.
+Version 0.5.4.
 
 ## 1. Purpose
 
@@ -50,7 +50,7 @@ Core modules:
 | `llm.py` | Provider adapters and the neutral chat message format |
 | `stream.py` | SSE / NDJSON parsing, tool-call fragment assembly |
 | `compaction.py` | Token estimates, tool-result pruning, turn-boundary summaries |
-| `session.py` | JSON session persistence, parent links, atomic writes |
+| `session.py` | JSON session persistence, parent links, atomic writes, corrupt-file normalization |
 | `chat.py` | Persistent chat wrapper, mode handling, session load/new |
 | `backend_server.py` | Newline-delimited JSON server with streaming notifications |
 | `console.py` | Dependency-free terminal event renderer |
@@ -178,7 +178,10 @@ Sessions are JSON files at `.filament/sessions/<id>.json`:
 ```
 
 Writes use a temporary file and atomic replace. Old session files missing new
-fields load with defaults; unknown fields are ignored.
+fields load with defaults; unknown fields are ignored. Loaded container fields
+are normalized: non-object messages, unknown roles, tool results without an id,
+and pending questions that cannot be answered are dropped, so one corrupt file
+cannot break the session list or the next turn.
 
 ## 8. Providers and Streaming
 

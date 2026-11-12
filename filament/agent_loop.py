@@ -263,18 +263,37 @@ class AgentLoop:
                     ),
                 },
             )
-        self.messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": str(pending.get("tool_call_id") or ""),
-                "name": "ask_user",
-                "content": str(answer or "").strip() or "(no answer given)",
-            }
-        )
+        call_id = str(pending.get("tool_call_id") or "")
+        answer_text = str(answer or "").strip() or "(no answer given)"
+        if call_id and self._pending_call_exists(call_id):
+            self.messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": "ask_user",
+                    "content": answer_text,
+                }
+            )
+        else:
+            # The assistant turn that asked the question is missing (corrupt
+            # or hand-edited session).  A tool message without its call would
+            # be rejected, so treat the answer as a new request instead.
+            self.messages.append({"role": "user", "content": answer_text})
         self.session.pending_question = None
         self.session.status = "running"
         self._sync()
         return self._loop()
+
+    def _pending_call_exists(self, call_id: str) -> bool:
+        """True when the latest assistant turn contains the pending tool call."""
+        for message in reversed(self.messages):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            for call in message.get("tool_calls") or []:
+                if isinstance(call, dict) and str(call.get("id") or "") == call_id:
+                    return True
+            return False
+        return False
 
     def cancel(self) -> None:
         self._cancel.set()
