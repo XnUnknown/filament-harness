@@ -642,12 +642,24 @@ class AgentLoop:
         stopped on a question can leave an assistant ``tool_calls`` message with
         no matching ``tool`` message.  Providers reject that sequence, so the
         missing results are inserted where the conversation resumes.
+
+        The reverse case is just as invalid: a ``tool`` message whose call is
+        gone (a truncated or hand-edited session) is rejected outright, so it is
+        dropped.  Duplicate results for one call are dropped too.
         """
         repaired = 0
         index = 0
         while index < len(self.messages):
             message = self.messages[index]
-            if not isinstance(message, dict) or message.get("role") != "assistant":
+            if not isinstance(message, dict):
+                index += 1
+                continue
+            if message.get("role") == "tool":
+                # No preceding assistant tool call owns this result.
+                self.messages.pop(index)
+                repaired += 1
+                continue
+            if message.get("role") != "assistant":
                 index += 1
                 continue
             raw_calls = message.get("tool_calls")
@@ -655,19 +667,30 @@ class AgentLoop:
                 index += 1
                 continue
             calls = [call for call in raw_calls if isinstance(call, dict)]
+            wanted: list[str] = []
+            for position, call in enumerate(calls, 1):
+                call_id = str(call.get("id") or "")
+                if not call_id:
+                    call_id = f"call_recovered_{index}_{position}"
+                    call["id"] = call_id
+                wanted.append(call_id)
             cursor = index + 1
             answered: set[str] = set()
             while cursor < len(self.messages):
                 candidate = self.messages[cursor]
                 if not isinstance(candidate, dict) or candidate.get("role") != "tool":
                     break
-                answered.add(str(candidate.get("tool_call_id") or ""))
-                cursor += 1
+                call_id = str(candidate.get("tool_call_id") or "")
+                if call_id in wanted and call_id not in answered:
+                    answered.add(call_id)
+                    cursor += 1
+                    continue
+                # A result for an earlier turn, a duplicate, or an id this
+                # turn never issued: providers reject those.
+                self.messages.pop(cursor)
+                repaired += 1
             for position, call in enumerate(calls, 1):
-                call_id = str(call.get("id") or "")
-                if not call_id:
-                    call_id = f"call_recovered_{index}_{position}"
-                    call["id"] = call_id
+                call_id = wanted[position - 1]
                 if call_id in answered:
                     continue
                 name = str(call.get("name") or "tool")

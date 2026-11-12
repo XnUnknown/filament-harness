@@ -578,18 +578,31 @@ class ToolRegistry:
         if not isinstance(content, str):
             raise ToolError("content must be a string")
         existed = target.exists()
+        newline = self._newline_style(target) if existed else "\n"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            self._write_text(target, content)
+            self._write_text(target, content, newline=newline)
         except OSError as exc:
             raise ToolError(f"could not write {self._rel(target)}: {exc}") from None
         self._note_change(target)
         action = "overwrote" if existed else "created"
         return f"{action} {self._rel(target)} ({len(content)} chars, {content.count(chr(10)) + 1} lines)"
 
-    def _write_text(self, target: Path, content: str) -> None:
-        if not content.endswith("\n"):
+    def _write_text(
+        self,
+        target: Path,
+        content: str,
+        *,
+        newline: str = "\n",
+        final_newline: bool = True,
+    ) -> None:
+        if final_newline and not content.endswith("\n"):
             content += "\n"
+        if newline == "\r\n":
+            # Keep the file's existing line endings: rewriting a CRLF file as
+            # LF turns one edited line into a whole-file diff and breaks files
+            # that require CRLF (.bat, .cmd, some Windows sources).
+            content = content.replace("\r\n", "\n").replace("\n", "\r\n")
         if self.config.atomic_writes:
             import tempfile
 
@@ -613,6 +626,17 @@ class ToolRegistry:
         else:
             with target.open("w", encoding="utf-8", newline="\n") as handle:
                 handle.write(content)
+
+    def _newline_style(self, target: Path) -> str:
+        """Return the dominant line ending of an existing file."""
+        try:
+            with target.open("rb") as handle:
+                sample = handle.read(65_536)
+        except OSError:
+            return "\n"
+        crlf = sample.count(b"\r\n")
+        lf = sample.count(b"\n") - crlf
+        return "\r\n" if crlf > lf else "\n"
 
     def _replace(
         self,
@@ -672,7 +696,7 @@ class ToolRegistry:
         after, note = self._replace(before, old, new, replace_all, self._rel(target))
         if after == before:
             return f"no change to {self._rel(target)}"
-        self._write_text(target, after)
+        self._write_text(target, after, newline=self._newline_style(target), final_newline=False)
         self._note_change(target)
         diff = _unified_diff(self._rel(target), before, after)
         count = before.count(old) if old in before else 1
@@ -707,7 +731,7 @@ class ToolRegistry:
             )
         if working == before:
             return f"no change to {self._rel(target)}"
-        self._write_text(target, working)
+        self._write_text(target, working, newline=self._newline_style(target), final_newline=False)
         self._note_change(target)
         diff = _unified_diff(self._rel(target), before, working)
         return f"applied {len(edits)} edits to {self._rel(target)}\n{diff}".rstrip()

@@ -337,6 +337,7 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         return {"mode": mode, "state": chat.state()}
 
     if method == "delete_session":
+        _require_idle("delete a session")
         chat = _require_chat()
         return {
             "deleted": chat.delete_session(
@@ -416,6 +417,7 @@ def handle(method: str, params: dict[str, Any]) -> Any:
         return {"cancelling": True}
 
     if method == "compress_context":
+        _require_idle("compress the context")
         chat = _require_chat()
         return chat.compress()
 

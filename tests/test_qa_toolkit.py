@@ -91,5 +91,62 @@ class ToolkitBooleanArgumentTest(unittest.TestCase):
         self.assertEqual(spawned, [])
 
 
+class ToolkitLineEndingTest(unittest.TestCase):
+    """Editing a CRLF file must not rewrite every line ending."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.registry = ToolRegistry(self.root, HarnessConfig())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write_bytes(self, name, data):
+        path = self.root / name
+        path.write_bytes(data)
+        return path
+
+    def test_edit_file_preserves_crlf(self):
+        path = self.write_bytes("win.py", b"one\r\ntwo\r\nthree\r\n")
+        self.registry.execute(
+            "edit_file", {"path": "win.py", "old_string": "two\n", "new_string": "TWO\n"}
+        )
+        self.assertEqual(path.read_bytes(), b"one\r\nTWO\r\nthree\r\n")
+
+    def test_multi_edit_preserves_crlf(self):
+        path = self.write_bytes("win.py", b"one\r\ntwo\r\nthree\r\n")
+        self.registry.execute(
+            "multi_edit",
+            {
+                "path": "win.py",
+                "edits": [
+                    {"old_string": "one", "new_string": "ONE"},
+                    {"old_string": "three", "new_string": "THREE"},
+                ],
+            },
+        )
+        self.assertEqual(path.read_bytes(), b"ONE\r\ntwo\r\nTHREE\r\n")
+
+    def test_write_file_preserves_crlf_on_an_existing_file(self):
+        path = self.write_bytes("run.cmd", b"@echo off\r\nrem old\r\n")
+        self.registry.execute(
+            "write_file", {"path": "run.cmd", "content": "@echo off\nrem new\n"}
+        )
+        self.assertEqual(path.read_bytes(), b"@echo off\r\nrem new\r\n")
+
+    def test_edit_file_does_not_add_a_trailing_newline(self):
+        path = self.write_bytes("noeol.py", b"a\nb")
+        self.registry.execute(
+            "edit_file", {"path": "noeol.py", "old_string": "a\n", "new_string": "A\n"}
+        )
+        self.assertEqual(path.read_bytes(), b"A\nb")
+
+    def test_new_file_still_gets_lf_and_a_final_newline(self):
+        path = self.root / "new.py"
+        self.registry.execute("write_file", {"path": "new.py", "content": "print(1)"})
+        self.assertEqual(path.read_bytes(), b"print(1)\n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -61,6 +61,32 @@ class TestOpenAIStream(unittest.TestCase):
         )
         self.assertEqual(result.content, "ok!")
 
+    def test_repeated_whole_call_chunks_do_not_duplicate_arguments(self):
+        # Some local servers send the entire call on every chunk instead of
+        # streaming fragments. Appending those arguments would produce
+        # "{...}{...}" and turn a valid call into a tool error.
+        client = OpenAICompatibleClient(model="m", base_url="http://localhost:1", stream=True)
+        call = {
+            "index": 0,
+            "id": "call_1",
+            "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+        }
+        lines = [sse({"choices": [{"delta": {"tool_calls": [call]}}]}) for _ in range(3)]
+        result = client._read_stream(FakeStream(lines), None, None)
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0].name, "read_file")
+        self.assertEqual(result.tool_calls[0].arguments, {"path": "a.py"})
+        self.assertEqual(result.tool_calls[0].argument_error, "")
+
+    def test_in_band_error_event_is_raised_not_swallowed(self):
+        # OpenAI can send an error object as a normal stream event. Returning
+        # an empty result would look like a model that answered nothing.
+        client = OpenAICompatibleClient(model="m", base_url="http://localhost:1", stream=True)
+        lines = [sse({"error": {"message": "server overloaded", "type": "server_error"}})]
+        with self.assertRaises(RuntimeError) as caught:
+            client._read_stream(FakeStream(lines), None, None)
+        self.assertIn("overloaded", str(caught.exception))
+
     def test_cancel_stops_reading(self):
         client = OpenAICompatibleClient(model="m", base_url="http://localhost:1", stream=True)
         lines = [sse({"choices": [{"delta": {"content": "one"}}]}), sse({"choices": [{"delta": {"content": "two"}}]})]
@@ -187,6 +213,14 @@ class TestOllamaStream(unittest.TestCase):
         result = client._read_stream(FakeStream(lines, "application/x-ndjson"), None, None)
         self.assertEqual(result.content, "ok")
         self.assertEqual(result.finish_reason, "stop")
+
+
+    def test_in_band_error_line_is_raised(self):
+        client = OllamaClient(model="m", base_url="http://localhost:1", stream=True)
+        lines = [json.dumps({"error": "model 'x' not found"})]
+        with self.assertRaises(RuntimeError) as caught:
+            client._read_stream(FakeStream(lines, "application/x-ndjson"), None, None)
+        self.assertIn("not found", str(caught.exception))
 
 
 class TestToolArguments(unittest.TestCase):

@@ -103,12 +103,19 @@ class TestBackendChat(BackendAgentTestCase):
         backend_server.STATE["busy"] = False
 
     def test_session_switch_is_rejected_while_busy(self):
+        self.chat.save()
+        session_file = (
+            self.root / ".filament" / "sessions" / f"{self.chat.session.session_id}.json"
+        )
+        self.assertTrue(session_file.exists())
         backend_server.STATE["busy"] = True
         try:
             for method, params in (
                 ("load_session", {"session_id": self.chat.session.session_id}),
                 ("new_session", {}),
                 ("select_workspace", {"path": str(self.root)}),
+                ("delete_session", {"session_id": self.chat.session.session_id}),
+                ("compress_context", {}),
             ):
                 reply = self.call(method, params)
                 self.assertFalse(reply["ok"], method)
@@ -117,6 +124,8 @@ class TestBackendChat(BackendAgentTestCase):
             backend_server.STATE["busy"] = False
         # The rejected switch must not have replaced the live session.
         self.assertIs(backend_server.STATE["chat"], self.chat)
+        # Nor may the rejected delete have removed its file.
+        self.assertTrue(session_file.exists())
 
     def test_cancel_marks_the_session(self):
         reply = self.call("cancel")

@@ -155,6 +155,18 @@ def _content_type(resp: Any) -> str:
     return str(value or "").lower()
 
 
+def _stream_error(provider: str, value: Any) -> RuntimeError:
+    """Build an exception from an in-band provider error object."""
+    if isinstance(value, dict):
+        text = value.get("message") or value.get("error") or value.get("detail")
+        if not isinstance(text, str) or not text.strip():
+            text = json.dumps(value, ensure_ascii=False, default=str)
+    else:
+        text = str(value)
+    text = " ".join(str(text).split())[:2000]
+    return RuntimeError(f"{provider} stream error: {text or 'unknown error'}")
+
+
 def _tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Convert neutral tool specs to the OpenAI function-tool envelope."""
     result: list[dict[str, Any]] = []
@@ -387,6 +399,9 @@ class OllamaClient:
         for chunk in iter_json_lines(resp):
             if _cancelled(cancel):
                 break
+            error = chunk.get("error")
+            if error:
+                raise _stream_error("ollama", error)
             message = chunk.get("message")
             if not isinstance(message, dict):
                 message = {}
@@ -602,6 +617,12 @@ class OpenAICompatibleClient:
                 continue
             if not isinstance(chunk, dict):
                 continue
+            # A provider can fail after the response has started; the error
+            # arrives as an ordinary event, not an HTTP status.  Returning an
+            # empty result would look like a model that said nothing.
+            error = chunk.get("error")
+            if error:
+                raise _stream_error("openai-compatible", error)
             chunk_usage = chunk.get("usage")
             if isinstance(chunk_usage, dict) and chunk_usage:
                 usage = {

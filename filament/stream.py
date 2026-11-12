@@ -82,6 +82,36 @@ def parse_tool_arguments(raw: Any) -> tuple[dict[str, Any], str]:
     return value, ""
 
 
+def _is_json_object(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), dict)
+    except (ValueError, TypeError):
+        return False
+
+
+def _merge_argument_text(current: str, fragment: str) -> str:
+    """Append one argument fragment, tolerating servers that resend the call."""
+    if not fragment:
+        return current
+    if not current or current == fragment:
+        return fragment
+    # A valid JSON object cannot be followed by more argument text.  When both
+    # sides look like complete objects the server resent the whole call instead
+    # of a delta; appending would produce "{...}{...}" and fail to parse.
+    # The cheap range checks keep normal fragmented streams from re-parsing the
+    # accumulated text on every chunk.
+    left = fragment.lstrip()
+    if (
+        left.startswith("{")
+        and left.rstrip().endswith("}")
+        and current.rstrip().endswith("}")
+        and _is_json_object(current.strip())
+        and _is_json_object(left.rstrip())
+    ):
+        return fragment
+    return current + fragment
+
+
 def merge_tool_call_delta(
     accumulator: dict[int, dict[str, Any]],
     index: int,
@@ -104,7 +134,7 @@ def merge_tool_call_delta(
             item["name"] = name
         arguments = function.get("arguments")
         if isinstance(arguments, str):
-            item["arguments"] += arguments
+            item["arguments"] = _merge_argument_text(item["arguments"], arguments)
         elif isinstance(arguments, dict):
             item["arguments"] = json.dumps(arguments)
     # Ollama sometimes sends the call flat instead of under "function".
