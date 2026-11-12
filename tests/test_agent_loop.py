@@ -221,6 +221,24 @@ class TestQuestions(AgentLoopTestCase):
         with self.assertRaises(ValueError):
             chat.send("another message")
 
+    def test_cancel_at_the_question_prompt_unblocks_the_session(self):
+        client = scripted(
+            {"tool_calls": [{"name": "ask_user", "arguments": {"question": "Well?"}}]},
+            {"content": "moving on"},
+        )
+        chat = self.make_chat(client)
+        first = chat.send("ask me")
+        self.assertEqual(first["status"], "awaiting_input")
+        self.assertTrue(chat.cancel())
+        self.assertIsNone(chat.session.pending_question)
+        second = chat.send("never mind")
+        self.assertEqual(second["status"], "done")
+        sent = client.requests[-1]
+        tool_messages = [m for m in sent if m.get("role") == "tool"]
+        self.assertTrue(
+            any("did not answer" in str(m.get("content")) for m in tool_messages)
+        )
+
 
 class TestModes(AgentLoopTestCase):
     def test_plan_mode_blocks_writes(self):
@@ -361,6 +379,68 @@ class TestToolPairingRepair(AgentLoopTestCase):
         tool_messages = [message for message in chat.messages if message.get("role") == "tool"]
         self.assertEqual(len(tool_messages), 1)
         self.assertNotIn("Not executed", tool_messages[0]["content"])
+
+
+class TestModelFailures(AgentLoopTestCase):
+    class FlakyClient:
+        supports_tools = True
+        stream = True
+
+        def __init__(self, failures: int, partial: str = ""):
+            self.failures = failures
+            self.partial = partial
+            self.calls = 0
+
+        def generate(self, prompt, system=None):
+            return ""
+
+        def chat(self, messages, tools=None, on_delta=None, cancel=None):
+            self.calls += 1
+            if on_delta and self.partial:
+                on_delta(self.partial)
+            if self.calls <= self.failures:
+                raise RuntimeError("connection dropped")
+            return ChatResult(content="recovered")
+
+    def test_failed_model_call_closes_the_assistant_turn(self):
+        events = []
+        client = self.FlakyClient(failures=2)
+        loop = AgentLoop(
+            HarnessConfig(),
+            self.root,
+            create_session(self.root),
+            client=client,
+            event_sink=events.append,
+        )
+        result = loop.run("go")
+        self.assertEqual(result.status, "error")
+        kinds = [event["type"] for event in events]
+        self.assertLess(kinds.index("assistant_start"), kinds.index("assistant_end"))
+        self.assertLess(kinds.index("assistant_end"), kinds.index("error"))
+        self.assertEqual(client.calls, 2)
+        ends = [event for event in events if event["type"] == "assistant_end"]
+        self.assertEqual(ends[-1]["content"], "")
+
+    def test_partial_stream_is_not_retried(self):
+        events = []
+        client = self.FlakyClient(failures=10, partial="PART")
+        loop = AgentLoop(
+            HarnessConfig(),
+            self.root,
+            create_session(self.root),
+            client=client,
+            event_sink=events.append,
+        )
+        result = loop.run("go")
+        self.assertEqual(result.status, "error")
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(
+            [event["text"] for event in events if event["type"] == "delta"], ["PART"]
+        )
+        ends = [event for event in events if event["type"] == "assistant_end"]
+        self.assertEqual(ends[-1]["content"], "PART")
+        self.assertEqual([message["role"] for message in loop.messages], ["system", "user"])
+        self.assertIn("connection dropped", result.content)
 
 
 if __name__ == "__main__":

@@ -134,8 +134,12 @@ def _chat_repl(config: HarnessConfig, args: argparse.Namespace) -> int:
         try:
             result = console.run_turn(message)
         except KeyboardInterrupt:
+            pending = chat.session.pending_question
             chat.cancel()
-            print("\n[cancelling after the current model call]")
+            if pending:
+                print("\n[question dismissed; the next message starts a fresh turn]")
+            else:
+                print("\n[cancelling after the current model call]")
             continue
         except Exception as exc:  # noqa: BLE001
             print(f"error: {exc}")

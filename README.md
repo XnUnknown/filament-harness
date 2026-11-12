@@ -55,6 +55,8 @@ stream = true
 
 Or use environment variables: `FILAMENT_CLIENT`, `FILAMENT_MODEL`,
 `FILAMENT_OLLAMA_URL`, `FILAMENT_API_KEY`, `FILAMENT_MAX_TOKENS`.
+`FILAMENT_USE_OLLAMA=1` selects Ollama only when no provider was chosen
+explicitly, so it never overrides `FILAMENT_CLIENT` or `[llm].kind`.
 
 Hosted OpenAI and Anthropic endpoints require an API key. Localhost and
 loopback endpoints are exempt so LM Studio, vLLM, and local Ollama work without
@@ -160,8 +162,10 @@ so you can watch both agents work without mixing their context.
 - Tool results over `tool_output_limit` characters are saved under
   `.filament/runs` and replaced with a head/tail excerpt.
 - Before a model call, context above `compact_threshold` is pruned and then
-  compacted. Compaction only cuts at a user turn, never between an assistant
-  tool call and its result, and replaces old turns with a summary.
+  compacted. Compaction prefers a user-turn boundary; a single long-running turn
+  with no later user message cuts at an assistant message instead, so the recent
+  window never starts with an orphan tool result. Old turns are replaced with a
+  summary.
 - If `compact_with_llm` is enabled, the summary is written by the model; if that
   call fails, a deterministic digest is used.
 

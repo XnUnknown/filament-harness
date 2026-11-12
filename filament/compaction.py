@@ -158,17 +158,46 @@ def _summarize(
 
 
 def _safe_cut(conversation: list[dict[str, Any]], keep_recent: int) -> int:
-    """Find an index that starts a fresh user turn and never a tool result."""
+    """Find an index the recent window can start at without breaking pairing."""
     if keep_recent < 1:
         keep_recent = 1
-    cut = max(0, len(conversation) - keep_recent)
+    target = max(0, len(conversation) - keep_recent)
+    if target <= 0:
+        return 0
+    # Prefer a user turn: the window then starts at a fresh request.
+    cut = target
     while cut > 0 and conversation[cut].get("role") != "user":
         cut -= 1
-    if cut <= 0:
-        return 0
+    if cut > 0:
+        return cut
+    # A single long-running turn has no later user boundary.  Cut at the first
+    # non-tool message instead: an assistant message keeps its own tool results
+    # in the window, and advancing past tool results never leaves an orphan.
+    cut = target
     while cut < len(conversation) and conversation[cut].get("role") == "tool":
         cut += 1
     return cut if cut < len(conversation) else 0
+
+
+def _drop_oldest_step(recent: list[dict[str, Any]]) -> None:
+    """Drop one pairing-safe chunk from the start of the recent window."""
+    if not recent:
+        return
+    role = recent[0].get("role")
+    recent.pop(0)
+    if role == "user":
+        # Prefer dropping a whole old turn, but keep the work that follows when
+        # this is the only user message left in the window.
+        if any(message.get("role") == "user" for message in recent):
+            while recent and recent[0].get("role") != "user":
+                recent.pop(0)
+        else:
+            while recent and recent[0].get("role") == "tool":
+                recent.pop(0)
+        return
+    # An assistant message owns the tool results that follow it.
+    while recent and recent[0].get("role") == "tool":
+        recent.pop(0)
 
 
 def compact_messages(
@@ -238,10 +267,9 @@ def compact_messages(
         len(recent) > 2
         and estimate_tokens(compacted, chars_per_token) > max_tokens
     ):
-        # Drop the oldest whole turn so the window still starts at a user turn.
-        recent.pop(0)
-        while recent and recent[0].get("role") != "user":
-            recent.pop(0)
+        # Drop one safe chunk, never a lone tool result and never the whole
+        # window when only one user turn remains.
+        _drop_oldest_step(recent)
         compacted = systems + [summary_message] + recent
         if not recent:
             break

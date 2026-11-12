@@ -263,6 +263,15 @@ class ChatOrchestrator:
                 active.cancel()
             except Exception:  # noqa: BLE001
                 pass
+        elif self.session.pending_question:
+            # Ctrl+C at a question prompt must not strand the session: clear the
+            # question so the next turn can repair the unanswered tool call.
+            self.session.pending_question = None
+            self.session.status = "idle"
+            try:
+                save_session(self.session, self.shell_cwd)
+            except (OSError, ValueError):
+                pass
         return True
 
     # -- context ------------------------------------------------------------

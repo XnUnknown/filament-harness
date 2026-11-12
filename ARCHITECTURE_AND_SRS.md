@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.1.
+Version 0.5.2.
 
 ## 1. Purpose
 
@@ -140,14 +140,17 @@ Before each model call:
 
 1. If the estimate is under `compact_threshold × budget`, continue.
 2. Otherwise prune large tool results older than `keep_recent_messages`.
-3. If still over, cut at a user-turn boundary. The cut never separates an
-   assistant tool call from its tool results and never starts the recent window
-   with a dangling tool message.
+3. If still over, cut at a user-turn boundary. When a single long turn has no
+   later user boundary, cut at the first non-tool message instead; an assistant
+   call stays ahead of its own results. The cut never separates an assistant
+   tool call from its tool results and never starts the recent window with a
+   dangling tool message.
 4. Replace older turns with one summary message:
    - deterministic digest of goals, files, commands, notes, and outcomes;
    - optionally rewritten by the model when `compact_with_llm` is true and the
      loop is the main agent.
-5. If the result is still too large, drop the oldest whole turns.
+5. If the result is still too large, drop the oldest whole turns, or one safe
+   assistant/tool step inside a long turn, without leaving an orphan result.
 
 Compaction stats and the current context usage are emitted as events, so the UI
 can show the meter and a compaction marker.
@@ -280,7 +283,9 @@ quoted `"false"` is rejected instead of acting like `true`.
 ## 12. Error Handling
 
 - Tool errors become `ERROR:` tool results the model can recover from.
-- Provider failures retry once, then end the turn with `status = "error"`.
+- Provider failures retry once when no text has streamed, then end the turn with
+  `status = "error"`. After a partial stream the turn ends immediately, so the
+  UI is not shown the same text twice.
 - A failed subagent becomes a tool error in the parent; other parallel children
   still return.
 - A failed compaction summary falls back to a deterministic digest.

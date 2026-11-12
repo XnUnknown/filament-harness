@@ -385,15 +385,30 @@ def load_config(path: str | Path | None = None) -> HarnessConfig:
         else:
             data[field_path] = converted
 
-    # Ollama cloud credentials may be provided under their native variable name.
-    ollama_key = os.environ.get("OLLAMA_API_KEY")
-    if ollama_key and not os.environ.get("FILAMENT_API_KEY") and not data.get("llm", {}).get("api_key"):
-        current_kind = data.get("llm", {}).get("kind")
-        if current_kind in (None, "auto", "ollama"):
-            data.setdefault("llm", {})["api_key"] = ollama_key
+    # `llm` may be invalid here; leave the shape alone so validation can report
+    # it as a named configuration error instead of a raw TypeError.
+    llm_data = data.get("llm")
+    if llm_data is None:
+        llm_data = {}
+        data["llm"] = llm_data
+    if isinstance(llm_data, dict):
+        # Ollama cloud credentials may be provided under their native variable name.
+        ollama_key = os.environ.get("OLLAMA_API_KEY")
+        if (
+            ollama_key
+            and not os.environ.get("FILAMENT_API_KEY")
+            and not llm_data.get("api_key")
+        ):
+            current_kind = llm_data.get("kind")
+            if current_kind in (None, "auto", "ollama"):
+                llm_data["api_key"] = ollama_key
 
-    if os.environ.get("FILAMENT_USE_OLLAMA") == "1":
-        data.setdefault("llm", {})["kind"] = "ollama"
+        if os.environ.get("FILAMENT_USE_OLLAMA") == "1":
+            # Legacy flag: a default for `auto`, not an override of a provider
+            # the user selected explicitly through the environment or TOML.
+            current_kind = llm_data.get("kind")
+            if current_kind is None or str(current_kind).strip().lower() in {"", "auto"}:
+                llm_data["kind"] = "ollama"
 
     cfg = _from_dict(data)
     cfg.validate()

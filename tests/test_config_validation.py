@@ -1,7 +1,9 @@
 """Config type validation: TOML and API updates must fail with named keys."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from filament.config import HarnessConfig, LLMConfig, load_config
 
@@ -105,6 +107,41 @@ class TestDirectValidation(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             llm.validate()
         self.assertIn("llm.model", str(caught.exception))
+
+
+class TestEnvironmentPrecedence(unittest.TestCase):
+    def _load_with_env(self, body, env):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "filament.toml"
+            if body is not None:
+                path.write_text(body, encoding="utf-8")
+            with patch.dict(os.environ, env, clear=True):
+                return load_config(path)
+
+    def test_explicit_client_beats_the_legacy_ollama_flag(self):
+        cfg = self._load_with_env(
+            None, {"FILAMENT_CLIENT": "mock", "FILAMENT_USE_OLLAMA": "1"}
+        )
+        self.assertEqual(cfg.llm.kind, "mock")
+
+    def test_legacy_flag_still_selects_ollama_for_auto(self):
+        cfg = self._load_with_env(None, {"FILAMENT_USE_OLLAMA": "1"})
+        self.assertEqual(cfg.llm.kind, "ollama")
+
+    def test_toml_provider_beats_the_legacy_flag(self):
+        cfg = self._load_with_env(
+            '[llm]\nkind = "openai"\n',
+            {"FILAMENT_USE_OLLAMA": "1", "FILAMENT_API_KEY": "k"},
+        )
+        self.assertEqual(cfg.llm.kind, "openai")
+
+    def test_invalid_llm_shape_is_still_a_validation_error(self):
+        with self.assertRaises(ValueError) as caught:
+            self._load_with_env(
+                'llm = "ollama"\n',
+                {"FILAMENT_USE_OLLAMA": "1", "OLLAMA_API_KEY": "k"},
+            )
+        self.assertIn("llm must be a table", str(caught.exception))
 
 
 class TestBackendConfigParity(unittest.TestCase):

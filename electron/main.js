@@ -131,7 +131,8 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  if (backend) backend.kill();
+  // On macOS the app stays alive and a new window may be opened again, so the
+  // backend must keep running. `before-quit` stops it when the app really exits.
   if (process.platform !== "darwin") app.quit();
 });
 

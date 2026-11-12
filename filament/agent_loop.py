@@ -159,6 +159,9 @@ class AgentLoop:
         self.compactions = int(session.usage.get("compactions", 0) or 0)
 
         self.messages: list[dict[str, Any]] = list(session.messages)
+        # Text streamed during the current model call, kept so a failed request
+        # can still close the assistant turn with what the user already saw.
+        self._stream_parts: list[str] = []
         system_prompt = build_system_prompt(
             config,
             self.workspace,
@@ -298,6 +301,14 @@ class AgentLoop:
             try:
                 result = self._chat()
             except Exception as exc:  # noqa: BLE001
+                # The surface started an assistant turn; close it with whatever
+                # was streamed so it is not left showing a stale typing state.
+                self._emit(
+                    "assistant_end",
+                    content="".join(self._stream_parts),
+                    step=self.steps,
+                    tool_calls=[],
+                )
                 if self._cancel.is_set():
                     status = "cancelled"
                     final = "Stopped at your request."
@@ -477,6 +488,7 @@ class AgentLoop:
     def _chat(self) -> ChatResult:
         tools = self.registry.specs()
         on_delta = self._on_delta if bool(getattr(self.config.llm, "stream", True)) else None
+        self._stream_parts = []
 
         stop = threading.Event()
         started = time.monotonic()
@@ -497,7 +509,9 @@ class AgentLoop:
                     cancel=lambda: self._cancel.is_set(),
                 )
             except Exception:
-                if self._cancel.is_set():
+                # A retry after deltas would duplicate half an answer on screen,
+                # so only transport failures before the first token are retried.
+                if self._cancel.is_set() or self._stream_parts:
                     raise
                 # One retry absorbs a dropped keep-alive or a flaky local server.
                 time.sleep(0.5)
@@ -514,6 +528,7 @@ class AgentLoop:
 
     def _on_delta(self, text: str) -> None:
         if text:
+            self._stream_parts.append(text)
             self._emit("delta", text=text)
 
     def _parse_fallback(self, content: str) -> ToolCall | None:
