@@ -155,8 +155,19 @@ class AgentLoop:
         self._cancel = cancel_event or threading.Event()
         self._files: list[str] = list(session.files_changed)
         self._lock = threading.RLock()
-        self.steps = int(session.usage.get("steps", 0) or 0)
-        self.compactions = int(session.usage.get("compactions", 0) or 0)
+        usage = session.usage if isinstance(session.usage, dict) else {}
+        try:
+            self._prior_steps = int(usage.get("steps", 0) or 0)
+        except (TypeError, ValueError):
+            self._prior_steps = 0
+        # The step limit is per turn.  Starting from the session total meant a
+        # session that once reached max_steps returned max_steps immediately on
+        # every later message, without ever calling the model again.
+        self.steps = 0
+        try:
+            self.compactions = int(usage.get("compactions", 0) or 0)
+        except (TypeError, ValueError):
+            self.compactions = 0
 
         self.messages: list[dict[str, Any]] = list(session.messages)
         # Text streamed during the current model call, kept so a failed request
@@ -703,7 +714,9 @@ class AgentLoop:
             self.session.todos = list(self.registry.todos)
             self.session.files_changed = sorted(set(self._files))
             self.session.usage = {
-                "steps": self.steps,
+                # Telemetry accumulates over the session; the step *limit* is
+                # applied to self.steps, which resets every turn.
+                "steps": self._prior_steps + self.steps,
                 "tokens": self.tokens,
                 "compactions": self.compactions,
             }
@@ -729,7 +742,7 @@ class AgentLoop:
             mode="plan" if self.read_only else "build",
             parent_id=self.session.session_id,
             kind="subagent",
-            title=task.strip().splitlines()[0][:80],
+            title=(task.strip().splitlines() or [""])[0][:80],
         )
         self.session.child_sessions.append(child.session_id)
         self._emit(
