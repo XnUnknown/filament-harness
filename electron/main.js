@@ -50,6 +50,24 @@ function startBackend() {
   backend.stderr.on("data", (data) => {
     console.error("backend:", data.toString());
   });
+  backend.on("error", (error) => {
+    // A missing interpreter or an unreadable cwd surfaces here. Without a
+    // listener Node treats it as an unhandled exception and kills the app.
+    backendReady = false;
+    for (const request of pending.values()) {
+      if (request.timer) clearTimeout(request.timer);
+      request.reject(new Error(`Backend failed to start: ${error.message}`));
+    }
+    pending.clear();
+    const win = windowRef();
+    if (win) {
+      win.webContents.send("filament:event", {
+        event: "backend_exit",
+        code: null,
+        error: String(error.message || error),
+      });
+    }
+  });
   backend.on("exit", (code) => {
     backendReady = false;
     for (const request of pending.values()) {

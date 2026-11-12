@@ -542,10 +542,31 @@ class ToolRegistry:
         if start >= total:
             raise ToolError(f"offset {offset} is past the end of {self._rel(target)} ({total} lines)")
         chunk = lines[start : start + limit]
-        numbered = "\n".join(f"{start + index + 1:>6}  {line}" for index, line in enumerate(chunk))
-        if len(numbered) > MAX_READ_CHARS:
-            numbered = numbered[:MAX_READ_CHARS] + "\n... [read output truncated]"
-        end = start + len(chunk)
+        numbered_lines = [
+            f"{start + index + 1:>6}  {line}" for index, line in enumerate(chunk)
+        ]
+        shown = len(numbered_lines)
+        if sum(len(item) + 1 for item in numbered_lines) > MAX_READ_CHARS:
+            # Trim whole lines so the footer never claims lines that were cut
+            # mid-text.  An agent that trusts a reported range must get it.
+            marker = "\n... [read output truncated]"
+            budget = max(1, MAX_READ_CHARS - len(marker))
+            kept: list[str] = []
+            used = 0
+            for item in numbered_lines:
+                extra = len(item) + (1 if kept else 0)
+                if kept and used + extra > budget:
+                    break
+                if not kept and extra > budget:
+                    kept.append(item[:budget])
+                    break
+                kept.append(item)
+                used += extra
+            shown = len(kept)
+            numbered = "\n".join(kept) + marker
+        else:
+            numbered = "\n".join(numbered_lines)
+        end = start + shown
         footer = f"\n[{self._rel(target)}: {total} lines total, showing {start + 1}-{end}]"
         if end < total:
             footer += f"; call read_file with offset={end + 1} for more"

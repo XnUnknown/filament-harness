@@ -152,6 +152,8 @@
     S.assistantTurns.clear();
     S.toolCards.clear();
     S.subagents.clear();
+    S.lastAssistantText = "";
+    S.lastUserMessage = "";
     renderSubagentList();
   }
 
@@ -659,7 +661,6 @@
     for (const message of messages) {
       if (message.role === "tool" && message.tool_call_id) results.set(message.tool_call_id, message);
     }
-    let finishSummary = "";
     for (const message of messages) {
       if (message.role === "user") {
         const text = String(message.content || "");
@@ -676,7 +677,14 @@
         if (text.trim()) addAssistantStatic(text);
         for (const call of calls) {
           if (call.name === "finish") {
-            finishSummary = String((call.arguments || {}).summary || "");
+            // Keep each done card at the turn where finish happened. Collecting
+            // only the last summary and appending it at the end moved an old
+            // finished turn below later messages.
+            const summary = String((call.arguments || {}).summary || "").trim();
+            if (summary && summary !== S.lastAssistantText) {
+              addDone(summary);
+              S.lastAssistantText = summary;
+            }
             continue;
           }
           if (call.name === "ask_user") {
@@ -698,7 +706,6 @@
         }
       }
     }
-    if (finishSummary && finishSummary.trim() !== S.lastAssistantText) addDone(finishSummary);
     scrollIfNearBottom(true);
   }
 
@@ -939,7 +946,8 @@
         break;
       }
       case "backend_exit": {
-        addSystem("The Python backend stopped. Restart the app.", "error");
+        const detail = event.error ? `: ${event.error}` : "";
+        addSystem(`The Python backend stopped${detail}. Restart the app.`, "error");
         setStatus("backend stopped");
         setBusy(false);
         break;

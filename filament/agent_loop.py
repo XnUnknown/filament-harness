@@ -390,6 +390,15 @@ class AgentLoop:
             pending: AskUser | None = None
             pending_call_id = ""
             for index, call in enumerate(calls):
+                if self._cancel.is_set():
+                    # A stop that lands while an earlier tool is still running
+                    # must keep the rest of the batch from executing.  They
+                    # still need results, or the assistant turn is invalid.
+                    for rest in calls[index:]:
+                        self._append_tool(
+                            rest, "Not executed: the run was cancelled.", ok=False
+                        )
+                    break
                 self._emit("tool_start", id=call.id, name=call.name, args=call.arguments)
                 started = time.monotonic()
                 output = ""

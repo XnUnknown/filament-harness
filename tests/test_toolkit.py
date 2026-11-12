@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -36,6 +37,21 @@ class TestFileTools(ToolkitTestCase):
         self.assertIn("     3  three", out)
         self.assertNotIn("one", out)
         self.assertIn("offset=4", out)
+
+    def test_read_file_truncation_reports_the_lines_it_actually_showed(self):
+        body = "\n".join(f"line_{index:04d} " + "x" * 180 for index in range(1, 401))
+        self.write("big.txt", body + "\n")
+        out = self.registry.execute("read_file", {"path": "big.txt"})
+        self.assertIn("read output truncated", out)
+        match = re.search(r"showing 1-(\d+)", out)
+        if match is None:
+            self.fail("footer did not report the shown line range")
+        shown = int(match.group(1))
+        self.assertLess(shown, 400)
+        self.assertGreaterEqual(shown, 1)
+        for number in re.findall(r"^ *(\d+)  ", out, re.MULTILINE):
+            self.assertLessEqual(int(number), shown)
+        self.assertIn(f"offset={shown + 1}", out)
 
     def test_write_file_creates_parents_and_tracks_change(self):
         changed = []

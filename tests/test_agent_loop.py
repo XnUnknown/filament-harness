@@ -192,6 +192,51 @@ class TestCancellation(AgentLoopTestCase):
         self.assertEqual(tool_messages[0]["tool_call_id"], "call_1")
         self.assertIn("cancelled", tool_messages[0]["content"])
 
+    def test_cancel_between_tools_skips_the_rest_of_the_batch(self):
+        client = scripted(
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "write_file",
+                        "arguments": {"path": "first.txt", "content": "one\n"},
+                    },
+                    {
+                        "id": "call_2",
+                        "name": "write_file",
+                        "arguments": {"path": "second.txt", "content": "two\n"},
+                    },
+                ]
+            },
+        )
+        events = []
+        loop = AgentLoop(
+            HarnessConfig(),
+            self.root,
+            create_session(self.root),
+            client=client,
+            event_sink=events.append,
+        )
+
+        def sink(event):
+            events.append(event)
+            if event.get("type") == "tool_end":
+                loop.cancel()
+
+        loop.sink = sink
+        result = loop.run("write both files")
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertTrue((self.root / "first.txt").exists())
+        self.assertFalse((self.root / "second.txt").exists())
+        results = {
+            message["tool_call_id"]: message["content"]
+            for message in loop.messages
+            if message.get("role") == "tool"
+        }
+        self.assertEqual(set(results), {"call_1", "call_2"})
+        self.assertIn("cancelled", results["call_2"])
+
 
 class TestQuestions(AgentLoopTestCase):
     def test_ask_user_pauses_and_resumes(self):
