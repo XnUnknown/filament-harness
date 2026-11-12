@@ -133,6 +133,20 @@ def _arg_int(args: dict[str, Any], key: str, default: int, minimum: int = 1, max
     return min(value, maximum)
 
 
+def _arg_bool(args: dict[str, Any], key: str, default: bool = False) -> bool:
+    """Accept a real JSON boolean only.
+
+    ``bool("false")`` is true, so treating strings as flags silently turned
+    ``replace_all: "false"`` into a full-file replacement.
+    """
+    value = args.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise ToolError(f"{key} must be true or false, got {type(value).__name__}")
+
+
 def _truncate_middle(text: str, limit: int) -> str:
     if limit < 1:
         raise ValueError("limit must be positive")
@@ -632,7 +646,7 @@ class ToolRegistry:
             raise ToolError("old_string must be a non-empty string")
         if not isinstance(new, str):
             raise ToolError("new_string must be a string")
-        replace_all = bool(args.get("replace_all", False))
+        replace_all = _arg_bool(args, "replace_all")
         before = target.read_text(encoding="utf-8", errors="replace")
         after, note = self._replace(before, old, new, replace_all, self._rel(target))
         if after == before:
@@ -667,7 +681,7 @@ class ToolRegistry:
                 working,
                 old,
                 new,
-                bool(edit.get("replace_all", False)),
+                _arg_bool(edit, "replace_all"),
                 f"edit {index}",
             )
         if working == before:
@@ -751,7 +765,7 @@ class ToolRegistry:
 
     def _grep(self, args: dict[str, Any], _call_id: str) -> str:
         pattern = _arg_str(args, "pattern")
-        flags = re.IGNORECASE if args.get("ignore_case") else 0
+        flags = re.IGNORECASE if _arg_bool(args, "ignore_case") else 0
         try:
             regex = re.compile(pattern, flags)
         except re.error as exc:
@@ -946,7 +960,7 @@ class ToolRegistry:
         tasks: list[tuple[str, str | None]] = []
         for index, item in enumerate(raw, 1):
             if isinstance(item, str):
-                task, system = item, None
+                task, system = item.strip(), None
             elif isinstance(item, dict):
                 task = str(item.get("task") or "").strip()
                 system = str(item.get("system") or "").strip() or None
