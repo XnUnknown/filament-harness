@@ -51,6 +51,10 @@ def _prompt_bool(text: str, default: bool) -> bool:
 
 
 def _prompt_choice(text: str, choices: list[str], default: str) -> str:
+    if default not in choices:
+        # A config value such as kind="auto" is not in this menu; falling back
+        # to the first choice keeps Enter from looping on "Invalid choice".
+        default = choices[0]
     print(text)
     for index, choice in enumerate(choices, 1):
         marker = " (default)" if choice == default else ""
@@ -242,9 +246,10 @@ class TUIApp:
         print("Provider Settings")
         print(_line())
         current = self.config.llm.kind
-        kind = _prompt_choice("Provider", ["mock", "ollama", "openai", "anthropic"], current)
+        kind = _prompt_choice("Provider", ["auto", "mock", "ollama", "openai", "anthropic"], current)
         self.config.llm.kind = kind
         defaults = {
+            "auto": None,
             "mock": None,
             "ollama": "http://localhost:11434",
             "openai": "https://api.openai.com/v1",

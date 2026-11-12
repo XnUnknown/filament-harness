@@ -153,7 +153,7 @@ def _run_batch(args: argparse.Namespace) -> int:
     from .orchestrator import Orchestrator
 
     try:
-        config = _apply_overrides(load_config(args.config), args)
+        config = _apply_overrides(load_config(getattr(args, "config", None)), args)
     except Exception as exc:  # noqa: BLE001
         print(f"config error: {exc}", file=sys.stderr)
         return 2
@@ -168,7 +168,7 @@ def _run_batch(args: argparse.Namespace) -> int:
         target = args.target or file_target
         orch = Orchestrator(
             config=config,
-            shell_cwd=args.shell_cwd,
+            shell_cwd=getattr(args, "shell_cwd", "."),
             allow_outside_target=args.allow_outside_target,
         )
         if not args.quiet:
@@ -222,25 +222,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="run a batch of coding tasks (legacy)")
     run.add_argument("tasks_file", nargs="?", help="JSON file with tasks")
-    run.add_argument("--config", help="path to TOML config")
+    # These duplicate the global options.  Without SUPPRESS, the subparser
+    # defaults overwrite values parsed before the subcommand, so
+    # `filament --shell-cwd X run tasks.json` silently used the repo root.
+    run.add_argument("--config", default=argparse.SUPPRESS, help="path to TOML config")
     run.add_argument("--target", help="override target file")
-    run.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"])
-    run.add_argument("--model", help="override LLM model")
-    run.add_argument("--max-tokens", type=int, help="context token budget")
-    run.add_argument("--max-steps", type=int, help=argparse.SUPPRESS)
+    run.add_argument("--client", choices=["auto", "mock", "ollama", "openai", "anthropic"], default=argparse.SUPPRESS)
+    run.add_argument("--model", default=argparse.SUPPRESS, help="override LLM model")
+    run.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS, help="context token budget")
+    run.add_argument("--max-steps", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     run.add_argument("--workers", type=int, help="parallel agent count")
-    run.add_argument("--shell-cwd", default=".", help="working directory")
+    run.add_argument("--shell-cwd", default=argparse.SUPPRESS, help="working directory")
     run.add_argument("--allow-outside-target", action="store_true", help="allow target outside shell cwd")
     run.add_argument("--no-review", action="store_true", help="skip review phase")
     run.add_argument("--no-fix", action="store_true", help="skip line fixes")
     run.add_argument("--max-fixes", type=int, help="maximum review fixes")
-    run.add_argument("--reasoning-effort", choices=["low", "medium", "high"], help="reasoning effort")
-    run.add_argument("--no-stream", action="store_true", help=argparse.SUPPRESS)
+    run.add_argument("--reasoning-effort", choices=["low", "medium", "high"], default=argparse.SUPPRESS, help="reasoning effort")
+    run.add_argument("--no-stream", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     run.add_argument("--report", help="write JSON report to this path")
     run.add_argument("--quiet", action="store_true", help="suppress progress")
 
     tui = sub.add_parser("tui", help="interactive terminal UI")
-    tui.add_argument("--config", default="filament.toml", help="config path")
+    tui.add_argument("--config", default=argparse.SUPPRESS, help="config path")
 
     sub.add_parser("serve", help="run the JSON backend for the Electron app")
     return parser
@@ -254,7 +257,7 @@ def main() -> int:
     if command == "tui":
         from .tui import run_tui
 
-        run_tui(args.config)
+        run_tui(getattr(args, "config", "filament.toml"))
         return 0
     if command == "serve":
         from .backend_server import main as backend_main
