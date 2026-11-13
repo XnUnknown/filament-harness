@@ -339,11 +339,25 @@ def handle(method: str, params: dict[str, Any]) -> Any:
     if method == "delete_session":
         _require_idle("delete a session")
         chat = _require_chat()
-        return {
-            "deleted": chat.delete_session(
-                str(params.get("session_id", "")), str(STATE["workspace"])
+        session_id = str(params.get("session_id", ""))
+        deleted = chat.delete_session(session_id, str(STATE["workspace"]))
+        result: dict[str, Any] = {"deleted": deleted}
+        if deleted and session_id == chat.session.session_id:
+            # The open session is written back to disk on the next turn, so
+            # deleting it while it is loaded would silently resurrect the file.
+            # Close it and hand the client the replacement session instead.
+            chat.new_session(chat.mode)
+            _emit(
+                {
+                    "type": "session",
+                    "session_id": chat.session.session_id,
+                    "title": chat.session.display_title,
+                    "mode": chat.mode,
+                }
             )
-        }
+            result["session"] = _session_payload(chat)
+            result["state"] = chat.state()
+        return result
 
     if method == "get_messages":
         chat = _require_chat()

@@ -29,6 +29,7 @@ from .stream import (
     iter_json_lines,
     iter_sse_data,
     merge_tool_call_delta,
+    new_call_id,
     parse_tool_arguments,
 )
 
@@ -165,6 +166,17 @@ def _stream_error(provider: str, value: Any) -> RuntimeError:
         text = str(value)
     text = " ".join(str(text).split())[:2000]
     return RuntimeError(f"{provider} stream error: {text or 'unknown error'}")
+
+
+def _call_id(raw: Any) -> str:
+    """Use the provider's id when it sent one, else a conversation-unique id.
+
+    Ollama never sends tool-call ids, so a per-response counter made every
+    turn's first call ``call_1``.  Results are paired by id, which then pointed
+    at the wrong turn in the transcript and in history rendering.
+    """
+    text = str(raw).strip() if raw is not None else ""
+    return text or new_call_id()
 
 
 def _tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -359,7 +371,7 @@ class OllamaClient:
         message = data.get("message") or {}
         content = _text(message.get("content"))
         calls: list[ToolCall] = []
-        for index, item in enumerate(message.get("tool_calls") or []):
+        for item in message.get("tool_calls") or []:
             if not isinstance(item, dict):
                 continue
             function = item.get("function") if isinstance(item.get("function"), dict) else item
@@ -369,7 +381,7 @@ class OllamaClient:
             arguments, error = parse_tool_arguments(function.get("arguments"))
             calls.append(
                 ToolCall(
-                    id=str(item.get("id") or f"call_{index + 1}"),
+                    id=_call_id(item.get("id")),
                     name=name,
                     arguments=arguments,
                     argument_error=error,
@@ -420,7 +432,7 @@ class OllamaClient:
                 arguments, error = parse_tool_arguments(function.get("arguments"))
                 calls.append(
                     ToolCall(
-                        id=str(item.get("id") or f"call_{len(calls) + 1}"),
+                        id=_call_id(item.get("id")),
                         name=name,
                         arguments=arguments,
                         argument_error=error,
@@ -568,7 +580,7 @@ class OpenAICompatibleClient:
         choice = choices[0] or {}
         message = choice.get("message") or {}
         calls: list[ToolCall] = []
-        for index, item in enumerate(message.get("tool_calls") or []):
+        for item in message.get("tool_calls") or []:
             if not isinstance(item, dict):
                 continue
             function = item.get("function") or {}
@@ -578,7 +590,7 @@ class OpenAICompatibleClient:
             arguments, error = parse_tool_arguments(function.get("arguments"))
             calls.append(
                 ToolCall(
-                    id=str(item.get("id") or f"call_{index + 1}"),
+                    id=_call_id(item.get("id")),
                     name=name,
                     arguments=arguments,
                     argument_error=error,
@@ -830,7 +842,7 @@ class AnthropicClient:
                     error = ""
                 calls.append(
                     ToolCall(
-                        id=str(block.get("id") or f"call_{len(calls) + 1}"),
+                        id=_call_id(block.get("id")),
                         name=name,
                         arguments=arguments,
                         argument_error=error,
@@ -940,7 +952,7 @@ class AnthropicClient:
                 arguments, error = {}, ""
             calls.append(
                 ToolCall(
-                    id=str(item.get("id") or f"call_{len(calls) + 1}"),
+                    id=_call_id(item.get("id")),
                     name=str(item["name"]),
                     arguments=arguments,
                     argument_error=error,

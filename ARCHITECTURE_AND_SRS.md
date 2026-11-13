@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.7.
+Version 0.5.8.
 
 ## 1. Purpose
 
@@ -231,6 +231,11 @@ envelope never reaches the user; any other object is reported verbatim.
 Responses are read through a bounded reader (8 MiB), and error bodies are
 truncated to 64 KiB before being included in an exception.
 
+When a provider omits a tool-call id (Ollama never sends one), the adapter
+generates a conversation-unique id instead of restarting a per-response
+counter. Results are paired by id, so a reused `call_1` would pair a later
+turn's result with an earlier call in the transcript.
+
 ## 9. Backend and UI
 
 The Electron app spawns `python -m filament.backend_server` with the repository
@@ -252,7 +257,9 @@ Methods: `ping`, `get_config`, `set_config`, `select_workspace`, `get_state`,
 
 The renderer is event-driven and holds no Node access. It renders assistant
 deltas, tool cards, nested subagent streams, todos, context, questions, and a
-final done summary. History is rebuilt from stored neutral messages.
+final done summary. History is rebuilt from stored neutral messages, pairing
+each tool result with the assistant turn it immediately follows rather than
+through one global id map.
 
 ## 10. Configuration
 
@@ -328,10 +335,20 @@ quoted `"false"` is rejected instead of acting like `true`.
   `content_block_start` (with no `input_json_delta`) is accepted.
 - A session file is identified by its file name; a copied file therefore loads
   as a new session and cannot overwrite the original id's file.
+- The legacy batch writer preserves a file's line endings on append and on a
+  line replacement; a missing final newline is repaired before code is
+  appended, so the new block never joins the last line.
+- The terminal chat keeps answering model questions until the turn ends; a
+  fixed round limit could leave a pending question the REPL had no way to
+  answer, blocking every later message.
+- A failed answer request in the Electron app restores the question card
+  instead of leaving it marked answered and the composer stuck.
+- Deleting the session that is currently open replaces it with a new session;
+  otherwise the next turn saved the deleted session back to disk.
 
 ## 13. Verification
 
-- 276 unit tests cover the loop, tools, editing, subagents, question
+- 289 unit tests cover the loop, tools, editing, subagents, question
   pause/resume, compaction, streaming parsers, backend protocol, configuration,
   and the legacy batch runner.
 - The full HTTP streaming path was exercised against a protocol-faithful fake

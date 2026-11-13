@@ -24,6 +24,7 @@ from .compaction import compact_messages, estimate_tokens
 from .config import HarnessConfig
 from .llm import ChatResult, LLMClient, ToolCall, build_client
 from .session import Session, create_session, save_session
+from .stream import new_call_id
 from .toolkit import (
     AskUser,
     FinishTask,
@@ -63,6 +64,22 @@ class LoopResult:
             "todos": self.todos,
             "files_changed": self.files_changed,
         }
+
+
+def assign_unique_call_ids(calls: list[ToolCall]) -> None:
+    """Give every tool call a non-empty id that no other call in the batch uses.
+
+    A provider can omit ids or repeat one; results are paired by id, so a
+    duplicate makes the transcript ambiguous.  Changing an id here is safe:
+    the assistant message and its result are both written from this call.
+    """
+    seen: set[str] = set()
+    for call in calls:
+        call_id = str(getattr(call, "id", "") or "").strip()
+        if not call_id or call_id in seen:
+            call_id = new_call_id()
+        seen.add(call_id)
+        call.id = call_id
 
 
 def build_system_prompt(
@@ -362,6 +379,9 @@ class AgentLoop:
                     if answer is not None:
                         content = answer
 
+            if calls:
+                assign_unique_call_ids(calls)
+
             assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
             if calls:
                 assistant_message["tool_calls"] = [call.to_message() for call in calls]
@@ -612,7 +632,7 @@ class AgentLoop:
         arguments = data.get("arguments") or data.get("args") or {}
         if not isinstance(arguments, dict):
             return None
-        return ToolCall(id=f"call_{int(time.time() * 1000)}", name=name.strip(), arguments=arguments)
+        return ToolCall(id=new_call_id(), name=name.strip(), arguments=arguments)
 
     def _fallback_final(self, content: str) -> str | None:
         """Return the answer carried by a ``{"final": ...}`` reply.

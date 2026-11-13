@@ -212,5 +212,92 @@ class TestFallbackFinalReply(unittest.TestCase):
         self.assertEqual(result.content, raw)
 
 
+class TestCallIdsAreUnique(unittest.TestCase):
+    """Duplicate or missing call ids must be replaced before the turn is saved.
+
+    Results are paired by id; the renderer's history rebuild used a global id
+    map, so a reused id paired an old card with a newer result.
+    """
+
+    class FixedIdClient:
+        supports_tools = True
+        stream = False
+
+        def __init__(self, ids):
+            self.ids = list(ids)
+            self.turns = 0
+
+        def generate(self, prompt, system=None):
+            return "summary"
+
+        def chat(self, messages, tools=None, on_delta=None, cancel=None):
+            self.turns += 1
+            if self.turns == 1:
+                calls = [
+                    ToolCall(id=value, name="list_dir", arguments={"path": "."})
+                    for value in self.ids
+                ]
+                return ChatResult(content="", tool_calls=calls)
+            return ChatResult(content="done")
+
+    def test_missing_and_duplicate_ids_are_replaced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            loop = AgentLoop(
+                HarnessConfig(compact_with_llm=False),
+                root,
+                create_session(root),
+                client=self.FixedIdClient(["", "", "dup", "dup"]),
+            )
+            result = loop.run("go")
+            issued = [
+                call["id"]
+                for message in loop.messages
+                if message.get("role") == "assistant"
+                for call in message.get("tool_calls") or []
+            ]
+            results = [
+                message["tool_call_id"]
+                for message in loop.messages
+                if message.get("role") == "tool"
+            ]
+        self.assertEqual(result.status, "done", result)
+        self.assertEqual(len(issued), 4)
+        self.assertEqual(len(set(issued)), 4)
+        self.assertEqual(results, issued)
+
+
+class TestFailedAnswerKeepsTheQuestion(unittest.TestCase):
+    """A rejected answer must leave the question answerable.
+
+    The Electron renderer restores the card after a failed `answer` request;
+    that is only correct while the session still holds the question.
+    """
+
+    def test_mismatched_answer_does_not_clear_the_pending_question(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = ScriptedClient(
+                [
+                    {"tool_calls": [{"name": "ask_user", "arguments": {"question": "Which?"}}]},
+                    {"content": "done"},
+                ]
+            )
+            chat = ChatOrchestrator(
+                HarnessConfig(compact_with_llm=False), str(root), client=client
+            )
+            first = chat.send("ask me")
+            self.assertEqual(first["status"], "awaiting_input")
+            question_id = (first.get("question") or {}).get("id") or ""
+
+            with self.assertRaises(ValueError):
+                chat.answer("wrong-id", "blue")
+            self.assertIsNotNone(chat.session.pending_question)
+
+            second = chat.answer(question_id, "blue")
+            self.assertEqual(second["status"], "done")
+            self.assertIsNone(chat.session.pending_question)
+
+
 if __name__ == "__main__":
     unittest.main()

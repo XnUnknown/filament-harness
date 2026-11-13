@@ -179,6 +179,22 @@ class TestBackendSessions(BackendAgentTestCase):
         sessions = self.call("list_sessions", {}, request_id=3)
         self.assertNotIn(session_id, [item["session_id"] for item in sessions["result"]])
 
+    def test_deleting_the_open_session_replaces_it(self):
+        chat_reply = self.call("chat", {"message": "first"})
+        old_id = chat_reply["result"]["session_id"]
+        deleted = self.call("delete_session", {"session_id": old_id}, request_id=2)
+        result = deleted["result"]
+        self.assertTrue(result["deleted"])
+        # The next turn saves the open session again, so a deleted session that
+        # is still loaded would reappear on disk. It must be closed instead.
+        new_id = result["session"]["session_id"]
+        self.assertNotEqual(new_id, old_id)
+        self.assertEqual(backend_server.STATE["chat"].session.session_id, new_id)
+        sessions = self.call("list_sessions", {}, request_id=3)
+        ids = [item["session_id"] for item in sessions["result"]]
+        self.assertNotIn(old_id, ids)
+        self.assertIn(new_id, ids)
+
 
 if __name__ == "__main__":
     unittest.main()

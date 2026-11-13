@@ -274,6 +274,63 @@ class TestOllamaStream(unittest.TestCase):
         self.assertIn("not found", str(caught.exception))
 
 
+class TestGeneratedCallIds(unittest.TestCase):
+    """A provider that omits call ids must never reuse one on a later turn."""
+
+    def test_ollama_generated_ids_are_unique_across_responses(self):
+        client = OllamaClient(model="m", base_url="http://localhost:1", stream=True)
+        payload = {
+            "message": {
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "read_file", "arguments": {"path": "a.py"}}}
+                ],
+            },
+            "done": True,
+        }
+        first = client._result_from_payload(payload).tool_calls[0].id
+        second = client._result_from_payload(payload).tool_calls[0].id
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertNotEqual(first, second)
+
+    def test_openai_generated_ids_are_unique_inside_and_across_responses(self):
+        client = OpenAICompatibleClient(model="m", base_url="http://localhost:1")
+        data = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {"function": {"name": "read_file", "arguments": "{}"}},
+                            {"function": {"name": "list_dir", "arguments": "{}"}},
+                        ]
+                    }
+                }
+            ]
+        }
+        first = [call.id for call in client._result_from_payload(data).tool_calls]
+        second = [call.id for call in client._result_from_payload(data).tool_calls]
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len(set(first + second)), 4)
+
+    def test_provider_supplied_ids_are_kept(self):
+        client = OllamaClient(model="m", base_url="http://localhost:1", stream=True)
+        payload = {
+            "message": {
+                "tool_calls": [
+                    {
+                        "id": "provider-id",
+                        "function": {"name": "read_file", "arguments": {}},
+                    }
+                ]
+            },
+            "done": True,
+        }
+        self.assertEqual(
+            client._result_from_payload(payload).tool_calls[0].id, "provider-id"
+        )
+
+
 class TestToolArguments(unittest.TestCase):
     def test_accepts_objects_and_json_strings(self):
         self.assertEqual(parse_tool_arguments({"a": 1}), ({"a": 1}, ""))

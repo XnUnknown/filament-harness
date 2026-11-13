@@ -449,6 +449,14 @@
     setBusy(S.busy);
   }
 
+  function setQuestionBusy(card, busy) {
+    if (!card) return;
+    card.classList.toggle("busy", busy);
+    card.querySelectorAll("input, button").forEach((node) => {
+      node.disabled = busy;
+    });
+  }
+
   function markQuestionAnswered(card, answer) {
     if (!card) return;
     card.classList.add("answered");
@@ -633,7 +641,11 @@
     if (S.busy || !S.pendingQuestion) return;
     const question = S.pendingQuestion;
     const card = document.querySelector(`.question[data-question-id="${question.id}"]`);
-    markQuestionAnswered(card, answer);
+    // Keep the card until the backend accepts the answer. Marking it answered
+    // up front left a dead card and a stuck composer when the request failed,
+    // even though the session still had the question pending.
+    setQuestionBusy(card, true);
+    S.pendingQuestion = null;
     addSystem(`You: ${answer}`, "answer");
     setBusy(true);
     setStatus("thinking");
@@ -643,9 +655,12 @@
         question_id: question.id,
         text: answer,
       });
+      markQuestionAnswered(card, answer);
       handleTurnResponse(result);
       refreshSessions();
     } catch (error) {
+      S.pendingQuestion = question;
+      setQuestionBusy(card, false);
       addSystem(`Answer failed: ${error.message}`, "error");
       setStatus("error");
     } finally {
@@ -671,11 +686,8 @@
   }
 
   function renderHistory(messages) {
-    const results = new Map();
-    for (const message of messages) {
-      if (message.role === "tool" && message.tool_call_id) results.set(message.tool_call_id, message);
-    }
-    for (const message of messages) {
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
       if (message.role === "user") {
         const text = String(message.content || "");
         if (text.startsWith("[context summary]") || text.startsWith("[Earlier conversation was compacted")) {
@@ -688,6 +700,18 @@
       if (message.role === "assistant") {
         const text = String(message.content || "");
         const calls = message.tool_calls || [];
+        // Results belong to the assistant turn they immediately follow. A
+        // global id map paired every card with the newest result that had the
+        // same id, and providers that omit ids (Ollama) reuse "call_1" on
+        // every turn, so old cards showed a later turn's output.
+        const results = new Map();
+        for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+          const result = messages[cursor];
+          if (result.role !== "tool") break;
+          if (result.tool_call_id && !results.has(result.tool_call_id)) {
+            results.set(result.tool_call_id, result);
+          }
+        }
         if (text.trim()) addAssistantStatic(text);
         for (const call of calls) {
           if (call.name === "finish") {

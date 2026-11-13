@@ -63,7 +63,7 @@ class Toolbox:
 
         if append:
             from .files import append_code
-            append_code(target, content, atomic=atomic)
+            append_code(target, content, atomic=atomic, ensure_line_start=False)
             return f"wrote {len(content)} chars to {target.relative_to(self.root)}"
 
         if atomic:

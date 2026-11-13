@@ -7,11 +7,23 @@ malformed line must not kill an otherwise healthy run.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Iterator
 
 
 class StreamParseError(RuntimeError):
     """Raised when a provider stream cannot be understood at all."""
+
+
+def new_call_id() -> str:
+    """Return a tool-call id that cannot collide with another generated id.
+
+    Several providers omit ids (Ollama never sends them), so a counter starting
+    at 1 restarts on every turn and every turn's first call becomes ``call_1``.
+    The id is only used to pair a result with its call, so it must be unique
+    across the whole conversation, not just inside one response.
+    """
+    return "call_" + uuid.uuid4().hex[:12]
 
 
 def iter_sse_data(response: Any) -> Iterator[str]:
@@ -159,7 +171,7 @@ def finish_tool_calls(accumulator: dict[int, dict[str, Any]]) -> list[dict[str, 
         arguments, error = parse_tool_arguments(item.get("arguments"))
         calls.append(
             {
-                "id": str(item.get("id") or f"call_{index + 1}"),
+                "id": str(item.get("id") or "") or new_call_id(),
                 "name": name,
                 "arguments": arguments,
                 "argument_error": error,

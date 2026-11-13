@@ -6,8 +6,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from filament.chat import ChatOrchestrator
 from filament.cli import _run_batch, build_parser
 from filament.config import HarnessConfig
+from filament.console import AgentConsole, ConsoleRenderer
+from filament.llm import ChatResult, ToolCall
 from filament.tui import _prompt_choice
 
 
@@ -100,6 +103,56 @@ class TestPromptChoice(unittest.TestCase):
                 choice = _prompt_choice("Provider", ["auto", "mock"], "removed-kind")
         self.assertEqual(choice, "auto")
         self.assertEqual(calls, ["auto"])
+
+
+class TestQuestionPacing(unittest.TestCase):
+    """A long chain of questions must not strand the REPL on a pending one."""
+
+    class AskThenFinish:
+        supports_tools = True
+        stream = False
+
+        def __init__(self, questions):
+            self.questions = questions
+            self.turns = 0
+
+        def generate(self, prompt, system=None):
+            return "summary"
+
+        def chat(self, messages, tools=None, on_delta=None, cancel=None):
+            self.turns += 1
+            if self.turns <= self.questions:
+                return ChatResult(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id=f"q{self.turns}",
+                            name="ask_user",
+                            arguments={"question": f"question {self.turns}"},
+                        )
+                    ],
+                )
+            return ChatResult(content="finished")
+
+    def test_seven_questions_are_all_answerable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = ChatOrchestrator(
+                HarnessConfig(compact_with_llm=False),
+                directory,
+                client=self.AskThenFinish(7),
+            )
+            console = AgentConsole(
+                chat,
+                renderer=ConsoleRenderer(stream=io.StringIO()),
+                input_fn=lambda prompt: "ok",
+            )
+            result = console.run_turn("ask away")
+            pending = chat.session.pending_question
+            follow_up = chat.send("next")
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["content"], "finished")
+        self.assertIsNone(pending)
+        self.assertEqual(follow_up["status"], "done")
 
 
 if __name__ == "__main__":

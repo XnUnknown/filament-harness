@@ -217,9 +217,11 @@ class AgentConsole:
 
     def run_turn(self, message: str) -> dict[str, Any]:
         result = self.chat.send(message)
-        for _ in range(6):
-            if result.get("status") != "awaiting_input":
-                break
+        # Keep answering until the turn actually ends.  A fixed number of
+        # rounds left the session holding a pending question that this REPL
+        # cannot answer, so every later message failed until /new.  Each round
+        # waits for real user input, so this cannot spin on its own.
+        while result.get("status") == "awaiting_input":
             question = result.get("question") or {}
             prompt = f"? {question.get('question', 'Question')}\n> "
             answer = self.input_fn(prompt).strip()
