@@ -125,6 +125,57 @@ class TestAnthropicStream(unittest.TestCase):
         result = client._read_stream(FakeStream(lines), None, None)
         self.assertEqual(result.content, "ok")
 
+    def test_tool_use_input_in_the_start_block_is_used(self):
+        # Some Anthropic-compatible servers send the complete tool input in
+        # content_block_start and no input_json_delta. Ignoring it executed the
+        # tool with empty arguments.
+        client = AnthropicClient(model="m", base_url="http://localhost:1", stream=True)
+        lines = [
+            sse(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "tu_start",
+                        "name": "read_file",
+                        "input": {"path": "start.py"},
+                    },
+                }
+            ),
+            sse({"type": "message_delta", "delta": {"stop_reason": "tool_use"}}),
+        ]
+        result = client._read_stream(FakeStream(lines), None, None)
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0].arguments, {"path": "start.py"})
+        self.assertEqual(result.tool_calls[0].argument_error, "")
+
+    def test_streamed_arguments_take_precedence_over_start_block_input(self):
+        client = AnthropicClient(model="m", base_url="http://localhost:1", stream=True)
+        lines = [
+            sse(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "tu_both",
+                        "name": "read_file",
+                        "input": {"path": "placeholder.py"},
+                    },
+                }
+            ),
+            sse(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"path": "streamed.py"}'},
+                }
+            ),
+        ]
+        result = client._read_stream(FakeStream(lines), None, None)
+        self.assertEqual(result.tool_calls[0].arguments, {"path": "streamed.py"})
+
     def test_messages_are_converted_and_tool_results_grouped(self):
         system, conversation = _anthropic_messages(
             [

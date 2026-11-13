@@ -763,7 +763,14 @@ class AgentLoop:
         try:
             directory = self.workspace / ".filament" / "runs"
             directory.mkdir(parents=True, exist_ok=True)
-            path = directory / f"tool-{call.id.replace('.', '-')[:40]}-{int(time.time())}.log"
+            # Tool call ids come from the provider, so they are untrusted path
+            # input.  Keep the log inside .filament/runs even for an id that
+            # contains separators or "..".
+            safe_id = "".join(
+                ch if (ch.isascii() and (ch.isalnum() or ch in "-_")) else "_"
+                for ch in str(call.id)
+            )[:40] or "call"
+            path = directory / f"tool-{safe_id}-{int(time.time())}.log"
             path.write_text(output, encoding="utf-8", errors="replace")
             saved = path.relative_to(self.workspace).as_posix()
         except (OSError, ValueError):

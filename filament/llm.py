@@ -871,11 +871,18 @@ class AnthropicClient:
                 block = event.get("content_block")
                 if not isinstance(block, dict):
                     block = {}
+                # The official API sends an empty ``input`` object in the start
+                # block and streams the real arguments as input_json_delta.
+                # Some Anthropic-compatible servers send the whole input here
+                # with no deltas; keep it as a fallback so the call is not
+                # executed with empty arguments.
+                start_input = block.get("input")
                 blocks[_block_index(event)] = {
                     "type": block.get("type"),
                     "text": str(block.get("text") or ""),
                     "id": block.get("id") or "",
                     "name": block.get("name") or "",
+                    "input": start_input if isinstance(start_input, dict) else None,
                     "json": "",
                 }
             elif kind == "content_block_delta":
@@ -884,7 +891,15 @@ class AnthropicClient:
                     continue
                 index = _block_index(event)
                 item = blocks.setdefault(
-                    index, {"type": "text", "text": "", "id": "", "name": "", "json": ""}
+                    index,
+                    {
+                        "type": "text",
+                        "text": "",
+                        "id": "",
+                        "name": "",
+                        "input": None,
+                        "json": "",
+                    },
                 )
                 if delta.get("type") == "text_delta":
                     text = str(delta.get("text") or "")
@@ -916,7 +931,13 @@ class AnthropicClient:
         for item in blocks.values():
             if item.get("type") != "tool_use" or not item.get("name"):
                 continue
-            arguments, error = parse_tool_arguments(item.get("json"))
+            raw_json = str(item.get("json") or "")
+            if raw_json.strip():
+                arguments, error = parse_tool_arguments(raw_json)
+            elif isinstance(item.get("input"), dict):
+                arguments, error = dict(item["input"]), ""
+            else:
+                arguments, error = {}, ""
             calls.append(
                 ToolCall(
                     id=str(item.get("id") or f"call_{len(calls) + 1}"),

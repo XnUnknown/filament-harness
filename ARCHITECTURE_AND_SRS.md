@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.6.
+Version 0.5.7.
 
 ## 1. Purpose
 
@@ -320,10 +320,18 @@ quoted `"false"` is rejected instead of acting like `true`.
 - A broken event sink is ignored so a UI problem cannot stop a run.
 - Oversized or malformed backend request lines produce one error response and do
   not terminate the server.
+- `edit_file` and `multi_edit` refuse a file that is not valid UTF-8 rather than
+  rewriting every undecodable byte as U+FFFD.
+- Provider tool call ids are sanitized before they are used in offloaded tool
+  log names, so an id containing path separators cannot leave `.filament/runs`.
+- An Anthropic-compatible stream that sends the complete tool input in
+  `content_block_start` (with no `input_json_delta`) is accepted.
+- A session file is identified by its file name; a copied file therefore loads
+  as a new session and cannot overwrite the original id's file.
 
 ## 13. Verification
 
-- 193 unit tests cover the loop, tools, editing, subagents, question
+- 276 unit tests cover the loop, tools, editing, subagents, question
   pause/resume, compaction, streaming parsers, backend protocol, configuration,
   and the legacy batch runner.
 - The full HTTP streaming path was exercised against a protocol-faithful fake

@@ -553,6 +553,46 @@ class TestCorruptSessionFiles(AgentLoopTestCase):
         self.assertIsNone(loaded.pending_question)
         self.assertEqual(loaded.status, "idle")
 
+    def test_copied_session_file_uses_its_filename_as_identity(self):
+        # Copying a session file by hand must create a loadable session under
+        # the new name, not a second handle to the original id: saving the
+        # loaded copy would otherwise overwrite the original file and leave
+        # the requested copy untouched.
+        session = self._save(title="original")
+        directory = self.root / ".filament" / "sessions"
+        original_path = directory / f"{session.session_id}.json"
+        copied_path = directory / "copied-session.json"
+        copied_path.write_text(original_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        listed = {item.session_id for item in list_sessions(self.root)}
+        self.assertEqual(listed, {session.session_id, "copied-session"})
+
+        loaded = load_session("copied-session", self.root)
+        self.assertEqual(loaded.session_id, "copied-session")
+        loaded.title = "copy"
+        save_session(loaded, self.root)
+        self.assertEqual(json.loads(original_path.read_text(encoding="utf-8"))["title"], "original")
+        self.assertEqual(json.loads(copied_path.read_text(encoding="utf-8"))["title"], "copy")
+
+
+class TestToolOutputClipping(AgentLoopTestCase):
+    def test_provider_tool_id_cannot_escape_the_runs_directory(self):
+        config = HarnessConfig(tool_output_limit=256)
+        loop = AgentLoop(config, self.root, create_session(self.root), client=MockLLM())
+        runs = (self.root / ".filament" / "runs").resolve()
+        for call_id in ("../../escape", "..\\..\\escape", "/abs/escape", "ok-id"):
+            with self.subTest(call_id=call_id):
+                call = ToolCall(id=call_id, name="read_file")
+                clipped = loop._clip_tool_output(call, "x" * 4000)
+                self.assertIn("[full output saved:", clipped)
+                saved = clipped.split("[full output saved:", 1)[1].strip().rstrip("]")
+                path = (self.root / saved).resolve()
+                self.assertTrue(path.is_relative_to(runs))
+                self.assertTrue(path.exists())
+                self.assertNotIn("..", path.name)
+                self.assertFalse(any(part == ".." for part in Path(saved).parts))
+                path.unlink()
+
 
 class TestModelFailures(AgentLoopTestCase):
     class FlakyClient:

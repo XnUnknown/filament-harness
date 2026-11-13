@@ -725,6 +725,27 @@ class ToolRegistry:
         replaced = text.replace(old, new) if replace_all else text.replace(old, new, 1)
         return replaced, note, count if replace_all else 1
 
+    def _read_editable_text(self, target: Path) -> str:
+        """Read a file for editing without silently replacing invalid bytes.
+
+        ``read_file`` tolerates undecodable bytes so the model can still look
+        around, but writing that lossy text back would replace every invalid
+        byte with U+FFFD.  An edit to one ASCII line must not corrupt an
+        unrelated Latin-1 comment, so editing refuses a file it cannot
+        round-trip instead.
+        """
+        try:
+            raw = target.read_bytes()
+        except OSError as exc:
+            raise ToolError(f"could not read {self._rel(target)}: {exc}") from None
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolError(
+                f"{self._rel(target)} is not valid UTF-8 (invalid byte at offset {exc.start}); "
+                "refusing to rewrite it lossily. Convert the file to UTF-8 or edit it with run_shell."
+            ) from None
+
     def _edit_file(self, args: dict[str, Any], _call_id: str) -> str:
         target = self._resolve(args.get("path"))
         if not target.exists():
@@ -736,7 +757,7 @@ class ToolRegistry:
         if not isinstance(new, str):
             raise ToolError("new_string must be a string")
         replace_all = _arg_bool(args, "replace_all")
-        before = target.read_text(encoding="utf-8", errors="replace")
+        before = self._read_editable_text(target)
         after, note, replacements = self._replace(
             before, old, new, replace_all, self._rel(target)
         )
@@ -759,7 +780,7 @@ class ToolRegistry:
             raise ToolError("too many edits in one call (max 40)")
         if not target.exists():
             raise ToolError(f"file not found: {self._rel(target)}")
-        before = target.read_text(encoding="utf-8", errors="replace")
+        before = self._read_editable_text(target)
         working = before
         for index, edit in enumerate(edits, 1):
             if not isinstance(edit, dict):

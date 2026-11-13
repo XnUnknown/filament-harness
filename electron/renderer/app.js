@@ -395,9 +395,17 @@
     agent.card.classList.remove("running");
     agent.card.classList.add(event.status === "done" ? "ok" : "failed");
     agent.status.textContent = `${event.status || "done"} · ${event.steps || 0} steps · ${formatTokens(event.tokens)} tokens`;
-    if (event.content) {
+    const summary = String(event.content || "").trim();
+    // A child that ends with a plain answer has already streamed that text into
+    // its card. Appending result.content as well showed the same paragraph
+    // twice; only add a summary the transcript does not already contain.
+    const turns = agent.stream.querySelectorAll(".assistant-text");
+    const lastText = turns.length
+      ? String(turns[turns.length - 1].textContent || "").replace(/\s+/g, " ").trim()
+      : "";
+    if (summary && summary.replace(/\s+/g, " ").trim() !== lastText) {
       const note = el("div", "subagent-result");
-      note.innerHTML = markdown(String(event.content));
+      note.innerHTML = markdown(summary);
       agent.stream.appendChild(note);
     }
     renderSubagentList();

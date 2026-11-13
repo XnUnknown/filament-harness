@@ -130,6 +130,34 @@ class TestFileTools(ToolkitTestCase):
         )
         self.assertEqual(self.read("a.py"), "ONE\nTWO\n")
 
+    def test_edit_file_refuses_to_corrupt_undecodable_bytes(self):
+        # Editing an ASCII line must not rewrite an unrelated Latin-1 byte as
+        # U+FFFD. The tool refuses instead of silently changing the file.
+        path = self.root / "legacy.py"
+        original = "café = 1\nx = 1\n".encode("latin-1")
+        path.write_bytes(original)
+        with self.assertRaises(ToolError) as caught:
+            self.registry.execute(
+                "edit_file", {"path": "legacy.py", "old_string": "x = 1", "new_string": "x = 2"}
+            )
+        self.assertIn("not valid UTF-8", str(caught.exception))
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_multi_edit_refuses_to_corrupt_undecodable_bytes(self):
+        path = self.root / "legacy.py"
+        original = "café = 1\nx = 1\n".encode("latin-1")
+        path.write_bytes(original)
+        with self.assertRaises(ToolError) as caught:
+            self.registry.execute(
+                "multi_edit",
+                {
+                    "path": "legacy.py",
+                    "edits": [{"old_string": "x = 1", "new_string": "x = 2"}],
+                },
+            )
+        self.assertIn("not valid UTF-8", str(caught.exception))
+        self.assertEqual(path.read_bytes(), original)
+
     def test_paths_cannot_escape_the_workspace(self):
         outside = self.root.parent / "secret.txt"
         outside.write_text("secret", encoding="utf-8")

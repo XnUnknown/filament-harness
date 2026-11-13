@@ -199,7 +199,13 @@ def load_session(session_id: str, cwd: str | Path) -> Session:
     if not isinstance(data, dict):
         raise ValueError("session file is not a JSON object")
     known = set(Session.__dataclass_fields__)
-    return Session(**{key: value for key, value in data.items() if key in known})
+    payload = {key: value for key, value in data.items() if key in known}
+    # The file name is authoritative.  A copied or hand-edited session whose
+    # inner id disagrees with its path must not keep the old identity: saving
+    # it would overwrite the file that name belongs to and leave the requested
+    # session untouched.
+    payload["session_id"] = safe_id
+    return Session(**payload)
 
 
 def list_sessions(
@@ -213,9 +219,15 @@ def list_sessions(
     sessions: list[Session] = []
     for path in directory.glob("*.json"):
         try:
+            session_id = _safe_session_id(path.stem)
+        except ValueError:
+            continue
+        try:
             data = json.loads(path.read_text(encoding="utf-8"))
             known = set(Session.__dataclass_fields__)
-            session = Session(**{key: value for key, value in data.items() if key in known})
+            payload = {key: value for key, value in data.items() if key in known}
+            payload["session_id"] = session_id
+            session = Session(**payload)
         except (OSError, TypeError, ValueError):
             continue
         if kind is not None and session.kind != kind and not include_children:
