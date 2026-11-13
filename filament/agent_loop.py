@@ -245,10 +245,23 @@ class AgentLoop:
         self._emit("status", state=state)
 
     # -- lifecycle ----------------------------------------------------------
+    def _begin_turn(self) -> None:
+        """Start a new turn: the step limit applies per turn, not per loop.
+
+        A loop object normally serves one turn, but reusing it for a second
+        message used to inherit the first turn's step count and could hit
+        ``max_steps`` before calling the model at all.  Steps already spent are
+        folded into the session telemetry before the counter restarts.
+        """
+        if self.steps:
+            self._prior_steps += self.steps
+        self.steps = 0
+
     def run(self, message: str, system_extra: str = "") -> LoopResult:
         message = str(message or "").strip()
         if not message:
             raise ValueError("message must not be empty")
+        self._begin_turn()
         if system_extra:
             # Applied for this run only; the durable prompt is rebuilt next time.
             self.messages[0]["content"] += "\n\nAdditional instructions\n" + system_extra.strip()
@@ -265,6 +278,7 @@ class AgentLoop:
         pending = self.session.pending_question
         if not pending:
             raise ValueError("no pending question to answer")
+        self._begin_turn()
         self.messages = list(self.session.messages)
         if not self.messages or self.messages[0].get("role") != "system":
             self.messages.insert(

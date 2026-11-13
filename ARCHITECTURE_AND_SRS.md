@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.8.
+Version 0.5.9.
 
 ## 1. Purpose
 
@@ -94,7 +94,9 @@ Guarantees:
   than burning tokens.
 - `cancel()` is checked before each model call; a stop during a stream ends the
   turn as `cancelled` without executing tools from the partial response.
-- `max_steps` bounds the main loop and each subagent independently.
+- `max_steps` bounds the main loop and each subagent independently. The limit is
+  per turn: a loop object reused for a second message starts a fresh count and
+  folds the steps it already spent into the session telemetry.
 
 ## 4. Tools
 
@@ -117,7 +119,17 @@ Tool results are clipped at `tool_output_limit`; the full text is saved under
 `edit_file` and `multi_edit` replace the exact text first. Only when that fails
 does a whitespace-tolerant pattern run against the original file, so a model
 that dropped trailing spaces still gets its edit without the harness rewriting
-unrelated lines. The file's dominant line ending is preserved on write.
+unrelated lines. An edit writes the text verbatim: only the replaced span is
+changed, so a file with mixed endings keeps each untouched line's own bytes,
+while the inserted replacement is converted to the file's dominant ending. A
+needle that ends with a newline also matches a last line that has no final
+newline, and the file keeps that state.
+
+`read_file` reports when a single line is longer than the 60k-char read budget
+and therefore cannot be paged with `offset`; the footer says so instead of
+implying the whole line was returned. `grep` merges overlapping context windows
+so a line that is both context for one match and a match for another is printed
+once, with the `:` marker.
 
 ## 5. Subagents
 
@@ -345,10 +357,18 @@ quoted `"false"` is rejected instead of acting like `true`.
   instead of leaving it marked answered and the composer stuck.
 - Deleting the session that is currently open replaces it with a new session;
   otherwise the next turn saved the deleted session back to disk.
+- An edit only rewrites the span it replaces: a mixed-ending file keeps every
+  untouched line's bytes, and an `old_string` that includes a newline still
+  matches a last line the file left without one.
+- An environment override cannot raise a raw `TypeError` when the config's
+  `llm` table is malformed; validation reports the named error instead.
+- `read_file` names the line that exceeded the read budget instead of reporting
+  a range the caller cannot page, and `grep` prints an overlapping context line
+  once.
 
 ## 13. Verification
 
-- 289 unit tests cover the loop, tools, editing, subagents, question
+- 297 unit tests cover the loop, tools, editing, subagents, question
   pause/resume, compaction, streaming parsers, backend protocol, configuration,
   and the legacy batch runner.
 - The full HTTP streaming path was exercised against a protocol-faithful fake

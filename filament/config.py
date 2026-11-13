@@ -381,7 +381,16 @@ def load_config(path: str | Path | None = None) -> HarnessConfig:
             continue
         if "." in field_path:
             section, key = field_path.split(".", 1)
-            data.setdefault(section, {})[key] = converted
+            current = data.get(section)
+            if not isinstance(current, dict):
+                if current is not None:
+                    # The table itself is invalid (for example `llm = "x"`).
+                    # Leaving the shape alone lets validate() report a named
+                    # configuration error instead of raising a raw TypeError.
+                    continue
+                current = {}
+                data[section] = current
+            current[key] = converted
         else:
             data[field_path] = converted
 

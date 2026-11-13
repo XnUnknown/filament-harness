@@ -560,6 +560,7 @@ class ToolRegistry:
             f"{start + index + 1:>6}  {line}" for index, line in enumerate(chunk)
         ]
         shown = len(numbered_lines)
+        cut_line: int | None = None
         if sum(len(item) + 1 for item in numbered_lines) > MAX_READ_CHARS:
             # Trim whole lines so the footer never claims lines that were cut
             # mid-text.  An agent that trusts a reported range must get it.
@@ -573,6 +574,10 @@ class ToolRegistry:
                     break
                 if not kept and extra > budget:
                     kept.append(item[:budget])
+                    # A single line longer than the read limit cannot be paged
+                    # with offset/limit; say so instead of pretending the whole
+                    # line was returned.
+                    cut_line = start + 1
                     break
                 kept.append(item)
                 used += extra
@@ -581,7 +586,13 @@ class ToolRegistry:
         else:
             numbered = "\n".join(numbered_lines)
         end = start + shown
-        footer = f"\n[{self._rel(target)}: {total} lines total, showing {start + 1}-{end}]"
+        footer = f"\n[{self._rel(target)}: {total} lines total, showing {start + 1}-{end}"
+        if cut_line is not None:
+            footer += (
+                f"; line {cut_line} is longer than the {MAX_READ_CHARS}-char read limit "
+                "and was cut - use grep or run_shell to read the rest of it"
+            )
+        footer += "]"
         if end < total:
             footer += f"; call read_file with offset={end + 1} for more"
         return f"{self._rel(target)}\n{numbered}{footer}"
@@ -610,6 +621,14 @@ class ToolRegistry:
         newline: str = "\n",
         final_newline: bool = True,
     ) -> None:
+        """Write ``content`` verbatim when ``newline`` is empty.
+
+        An edit passes ``newline=""``: the text was produced by replacing one
+        span of the original file, so untouched lines must keep their exact
+        bytes (a mixed-ending file would otherwise have every other line
+        rewritten to the dominant ending).  The inserted text is matched to the
+        file's ending by :meth:`_replace` instead.
+        """
         if final_newline and not content.endswith("\n"):
             content += "\n"
         if newline == "\r\n":
@@ -652,6 +671,48 @@ class ToolRegistry:
         lf = sample.count(b"\n") - crlf
         return "\r\n" if crlf > lf else "\n"
 
+    @staticmethod
+    def _with_newline(text: str, newline: str) -> str:
+        """Return ``text`` with every line ending expressed as ``newline``."""
+        if newline not in {"\n", "\r\n"}:
+            return text
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        return normalized if newline == "\n" else normalized.replace("\n", newline)
+
+    @staticmethod
+    def _without_final_separator(
+        text: str, old: str, new: str
+    ) -> tuple[str, str] | None:
+        """Adapt a needle that ends with a newline to a file that has none.
+
+        A model copying the last line out of an editor routinely includes its
+        newline, but a file may legitimately end without one.  The exact match
+        then fails even though the line is there.
+
+        The adaptation is only safe for a unique match at the very end of the
+        text: dropping the trailing newline from a mid-file replacement would
+        join the next line onto it.  Any other needle is left to the normal
+        fuzzy path, which keeps the newline in place.
+        """
+        if not text or text.endswith(("\n", "\r")):
+            return None
+        if not old.endswith("\n"):
+            return None
+        trimmed_old = old[:-2] if old.endswith("\r\n") else old[:-1]
+        if not trimmed_old or not text.endswith(trimmed_old):
+            return None
+        if text.count(trimmed_old) != 1:
+            return None
+        if new.endswith("\r\n"):
+            trimmed_new = new[:-2]
+        elif new.endswith("\n"):
+            trimmed_new = new[:-1]
+        else:
+            trimmed_new = new
+        if trimmed_old == trimmed_new:
+            return None
+        return trimmed_old, trimmed_new
+
     def _replace(
         self,
         text: str,
@@ -659,14 +720,27 @@ class ToolRegistry:
         new: str,
         replace_all: bool,
         label: str,
+        newline: str = "\n",
     ) -> tuple[str, str, int]:
-        """Return ``(text, note, replacements)`` after replacing ``old``."""
+        """Return ``(text, note, replacements)`` after replacing ``old``.
+
+        ``newline`` is the file's dominant line ending; the inserted text is
+        converted to it so one edit cannot leave the file with mixed endings,
+        while every untouched line keeps its own bytes.
+        """
         if not old:
             raise ToolError(f"{label}: old_string must not be empty")
+        new = self._with_newline(new, newline)
         if old == new:
             raise ToolError(f"{label}: old_string and new_string are identical")
         count = text.count(old)
         note = ""
+        if count == 0:
+            adapted = self._without_final_separator(text, old, new)
+            if adapted is not None and text.count(adapted[0]):
+                old, new = adapted
+                count = text.count(old)
+                note = " (matched the last line without its missing final newline)"
         if count == 0:
             # Fuzzy fallback: models often drop trailing whitespace or CRLF.
             if not _normalize_text(old):
@@ -680,7 +754,7 @@ class ToolRegistry:
                         f"{label}: old_string matches {len(matches)} places (lines {lines}); "
                         "include more context or set replace_all"
                     )
-                replacement = _normalize_text(new)
+                replacement = self._with_newline(_normalize_text(new), newline)
                 replaced = pattern.sub(
                     lambda _match: replacement,
                     text,
@@ -693,7 +767,7 @@ class ToolRegistry:
             # normalize the whole text rather than refuse a legitimate edit.
             normalized_text = _normalize_text(text)
             normalized_old = _normalize_text(old)
-            normalized_new = _normalize_text(new)
+            normalized_new = self._with_newline(_normalize_text(new), newline)
             fuzzy = _count_occurrences(normalized_text, normalized_old)
             if fuzzy == 0:
                 raise ToolError(
@@ -758,12 +832,15 @@ class ToolRegistry:
             raise ToolError("new_string must be a string")
         replace_all = _arg_bool(args, "replace_all")
         before = self._read_editable_text(target)
+        newline = self._newline_style(target)
         after, note, replacements = self._replace(
-            before, old, new, replace_all, self._rel(target)
+            before, old, new, replace_all, self._rel(target), newline
         )
         if after == before:
             return f"no change to {self._rel(target)}"
-        self._write_text(target, after, newline=self._newline_style(target), final_newline=False)
+        # Written verbatim: the replacement text was already matched to the
+        # file's ending, so lines this edit did not touch keep their bytes.
+        self._write_text(target, after, newline="", final_newline=False)
         self._note_change(target)
         diff = _unified_diff(self._rel(target), before, after)
         return (
@@ -781,6 +858,7 @@ class ToolRegistry:
         if not target.exists():
             raise ToolError(f"file not found: {self._rel(target)}")
         before = self._read_editable_text(target)
+        newline = self._newline_style(target)
         working = before
         for index, edit in enumerate(edits, 1):
             if not isinstance(edit, dict):
@@ -797,10 +875,11 @@ class ToolRegistry:
                 new,
                 _arg_bool(edit, "replace_all"),
                 f"edit {index}",
+                newline,
             )
         if working == before:
             return f"no change to {self._rel(target)}"
-        self._write_text(target, working, newline=self._newline_style(target), final_newline=False)
+        self._write_text(target, working, newline="", final_newline=False)
         self._note_change(target)
         diff = _unified_diff(self._rel(target), before, working)
         return f"applied {len(edits)} edits to {self._rel(target)}\n{diff}".rstrip()
@@ -907,19 +986,26 @@ class ToolRegistry:
             text = raw.decode("utf-8", "replace")
             lines = text.splitlines()
             rel = self._rel(path)
-            for index, line in enumerate(lines):
-                if not regex.search(line):
-                    continue
-                start = max(0, index - context)
-                end = min(len(lines), index + context + 1)
-                for offset in range(start, end):
-                    marker = ":" if offset == index else "-"
-                    entry = f"{rel}:{offset + 1}{marker}{lines[offset]}"
-                    results.append(entry)
-                    total_chars += len(entry) + 1
-                    if total_chars > MAX_GREP_CHARS:
-                        truncated = True
-                        return False
+            hits = [index for index, line in enumerate(lines) if regex.search(line)]
+            if not hits:
+                return True
+            # Merge overlapping context windows so a line that is both context
+            # for one match and a match for another is printed once, with the
+            # ":" marker that shows it matched.
+            window: dict[int, bool] = {}
+            for index in hits:
+                for offset in range(
+                    max(0, index - context), min(len(lines), index + context + 1)
+                ):
+                    window[offset] = window.get(offset, False) or offset == index
+            for offset, is_match in window.items():
+                marker = ":" if is_match else "-"
+                entry = f"{rel}:{offset + 1}{marker}{lines[offset]}"
+                results.append(entry)
+                total_chars += len(entry) + 1
+                if total_chars > MAX_GREP_CHARS:
+                    truncated = True
+                    return False
                 if len(results) >= max_results:
                     truncated = True
                     return False

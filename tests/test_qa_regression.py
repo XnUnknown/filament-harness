@@ -106,5 +106,110 @@ class TestQARegressions(unittest.TestCase):
             self.assertIn("exit_code: 0", result)
             self.assertIn("424242", result)
 
+
+class TestEditingAndContextRegressions(unittest.TestCase):
+    """Defects found after the 0.5.8 QA round."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.config = HarnessConfig()
+        self.config.validate()
+        from filament.toolkit import ToolRegistry
+
+        self.registry = ToolRegistry(self.root, self.config)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_edit_keeps_mixed_line_endings_of_untouched_lines(self):
+        path = self.root / "mixed.txt"
+        path.write_bytes(b"a\r\nb\nc\r\n")
+        self.registry.execute(
+            "edit_file", {"path": "mixed.txt", "old_string": "a", "new_string": "A"}
+        )
+        # Only line 1 changed; the LF-encoded line 2 must not be rewritten as
+        # CRLF just because CRLF dominates the file.
+        self.assertEqual(path.read_bytes(), b"A\r\nb\nc\r\n")
+
+    def test_edit_inserts_the_file_line_ending(self):
+        path = self.root / "win.py"
+        path.write_bytes(b"one\r\ntwo\r\n")
+        self.registry.execute(
+            "edit_file",
+            {"path": "win.py", "old_string": "one\r\ntwo", "new_string": "one\nTWO"},
+        )
+        self.assertEqual(path.read_bytes(), b"one\r\nTWO\r\n")
+
+    def test_edit_matches_the_last_line_without_a_final_newline(self):
+        path = self.root / "noeol.py"
+        path.write_bytes(b"x = 1")
+        out = self.registry.execute(
+            "edit_file",
+            {"path": "noeol.py", "old_string": "x = 1\n", "new_string": "x = 2\n"},
+        )
+        self.assertIn("matched the last line", out)
+        # The file must keep its missing final newline.
+        self.assertEqual(path.read_bytes(), b"x = 2")
+
+    def test_edit_with_a_trailing_newline_does_not_join_a_mid_file_line(self):
+        path = self.root / "mid.py"
+        path.write_bytes(b"a\nb")
+        self.registry.execute(
+            "edit_file", {"path": "mid.py", "old_string": "a\n", "new_string": "A\n"}
+        )
+        # The needle is not at EOF, so its newline must survive the edit.
+        self.assertEqual(path.read_bytes(), b"A\nb")
+
+    def test_read_file_flags_a_line_that_cannot_be_paged(self):
+        (self.root / "bundle.js").write_text("var a = 1;" + "x" * 100_000, encoding="utf-8")
+        out = self.registry.execute("read_file", {"path": "bundle.js"})
+        self.assertIn("longer than the 60000-char read limit", out)
+        self.assertLess(len(out), 61_000)
+
+    def test_grep_prints_an_overlapping_context_line_once(self):
+        (self.root / "dup.txt").write_text(
+            "alpha\nneedle1\nneedle2\nomega\n", encoding="utf-8"
+        )
+        out = self.registry.execute("grep", {"pattern": "needle", "context": 2})
+        self.assertEqual(out.count("dup.txt:2:"), 1)
+        self.assertEqual(out.count("dup.txt:2-"), 0)
+        self.assertEqual(out.count("dup.txt:3:"), 1)
+        self.assertEqual(out.count("dup.txt:1-"), 1)
+
+    def test_second_turn_on_one_loop_gets_a_fresh_step_budget(self):
+        from filament.agent_loop import AgentLoop
+        from filament.session import create_session
+
+        (self.root / "steps.py").write_text("print(1)\n", encoding="utf-8")
+        client = MockLLM(
+            script=[
+                {"tool_calls": [{"name": "read_file", "arguments": {"path": "steps.py"}}]},
+                {"tool_calls": [{"name": "read_file", "arguments": {"path": "steps.py"}}]},
+                {"content": "third"},
+            ]
+        )
+        cfg = HarnessConfig(max_steps=2)
+        cfg.validate()
+        loop = AgentLoop(cfg, self.root, create_session(self.root), client=client)
+        first = loop.run("first")
+        self.assertEqual(first.status, "max_steps")
+        second = loop.run("second")
+        self.assertEqual(second.status, "done")
+        self.assertEqual(second.content, "third")
+
+    def test_env_override_reports_a_named_error_for_an_invalid_llm_table(self):
+        from unittest import mock
+
+        from filament.config import load_config
+
+        path = self.root / "filament.toml"
+        path.write_text('llm = "oops"\n', encoding="utf-8")
+        with mock.patch.dict("os.environ", {"FILAMENT_MODEL": "x"}):
+            with self.assertRaises(ValueError) as caught:
+                load_config(path)
+        self.assertIn("llm must be a table", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
