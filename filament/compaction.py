@@ -176,7 +176,17 @@ def _safe_cut(conversation: list[dict[str, Any]], keep_recent: int) -> int:
     cut = target
     while cut < len(conversation) and conversation[cut].get("role") == "tool":
         cut += 1
-    return cut if cut < len(conversation) else 0
+    if cut < len(conversation):
+        return cut
+    # The whole tail is one tool batch (the common shape after spawn_agents or
+    # a wide read/grep fan-out).  Advancing past its results reached the end,
+    # but giving up here left the prompt over budget: start the window at the
+    # assistant turn that issued the batch, which keeps every result with its
+    # call and still lets the older turns be summarized.
+    cut = len(conversation) - 1
+    while cut > 0 and conversation[cut].get("role") == "tool":
+        cut -= 1
+    return cut if cut > 0 else 0
 
 
 def _drop_oldest_step(recent: list[dict[str, Any]]) -> None:
@@ -233,6 +243,15 @@ def compact_messages(
     conversation = [m for m in working if m.get("role") != "system"]
     cut = _safe_cut(conversation, keep_recent)
     if cut <= 0:
+        # No turn boundary exists (the whole history fits inside the keep
+        # window).  Pruning preserves the tool-call pairing, so shrink the fat
+        # results instead of sending a request the provider rejects for length.
+        if estimate_tokens(working, chars_per_token) > max_tokens:
+            reduced, extra_pruned = prune_tool_results(working, keep_recent=2, limit_chars=400)
+            if extra_pruned:
+                working = reduced
+                stats["pruned_results"] += extra_pruned
+                pruned += extra_pruned
         stats["after_tokens"] = estimate_tokens(working, chars_per_token)
         return working, pruned > 0, stats
 
@@ -262,6 +281,17 @@ def compact_messages(
         body = summary_message["content"]
         summary_message["content"] = body[: max(300, int(len(body) * 0.7))] + "\n[summary truncated]"
         compacted = systems + [summary_message] + recent
+
+    # The recent window can exceed the budget by itself (one assistant turn
+    # with a wide tool batch).  Shrink its fat results rather than dropping the
+    # whole step: the batch and its pairing survive and the model still sees
+    # how large each output was.
+    if estimate_tokens(compacted, chars_per_token) > max_tokens:
+        reduced, extra_pruned = prune_tool_results(recent, keep_recent=2, limit_chars=400)
+        if extra_pruned:
+            recent = reduced
+            stats["pruned_results"] += extra_pruned
+            compacted = systems + [summary_message] + recent
 
     while (
         len(recent) > 2

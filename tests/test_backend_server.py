@@ -1,8 +1,10 @@
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -115,6 +117,40 @@ class TestBackendProcess(unittest.TestCase):
             self.assertIn("exceeds", replies[0]["error"])
             self.assertTrue(replies[1]["ok"])
             self.assertEqual(replies[1]["id"], 4)
+
+
+class TestBackendServerLoop(unittest.TestCase):
+    def test_async_reply_survives_stdin_eof(self):
+        # A pipe client that sends one chat request and closes stdin used to
+        # lose the reply: main() returned on EOF and the daemon worker died.
+        stdin = io.BytesIO(b'{"id": 7, "method": "chat", "params": {"message": "hi"}}\n')
+        stdout = io.BytesIO()
+        seen: list[str] = []
+
+        def slow_respond(line):
+            seen.append(json.loads(line)["method"])
+            time.sleep(0.2)
+            return '{"id": 7, "ok": true, "result": {"status": "done"}}'
+
+        try:
+            with patch.object(backend_server, "respond", side_effect=slow_respond):
+                backend_server.run_server(stdin, stdout)
+        finally:
+            backend_server.EVENT_STREAM = None
+        replies = [json.loads(line) for line in stdout.getvalue().decode("utf-8").splitlines()]
+        self.assertEqual(seen, ["chat"])
+        self.assertEqual(replies, [{"id": 7, "ok": True, "result": {"status": "done"}}])
+
+    def test_sync_request_is_answered_before_eof(self):
+        stdin = io.BytesIO(b'{"id": 1, "method": "ping"}\n')
+        stdout = io.BytesIO()
+        try:
+            backend_server.run_server(stdin, stdout)
+        finally:
+            backend_server.EVENT_STREAM = None
+        replies = [json.loads(line) for line in stdout.getvalue().decode("utf-8").splitlines()]
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0]["id"], 1)
 
 
 class TestApplyConfig(unittest.TestCase):

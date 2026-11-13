@@ -375,7 +375,9 @@
     body.appendChild(stream);
     head.addEventListener("click", () => body.classList.toggle("hidden"));
     card.append(head, body);
-    transcript.appendChild(card);
+    // Nested agents belong inside their parent's stream; the top-level case
+    // still resolves to the transcript because containerFor falls back to it.
+    containerFor(event).appendChild(card);
     S.subagents.set(event.id || `agent-${S.subagents.size + 1}`, {
       card,
       status: head.querySelector(".subagent-status"),

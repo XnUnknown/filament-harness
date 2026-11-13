@@ -148,6 +148,52 @@ class TestBasicLoop(AgentLoopTestCase):
         self.assertEqual(client.requests, [])
 
 
+class TestLoopCompaction(AgentLoopTestCase):
+    def test_wide_read_batch_is_compacted_before_the_next_call(self):
+        # Regression: one assistant turn with many large tool results used to
+        # make the turn cut give up, so the next model call went out over
+        # budget with the whole batch still attached.
+        (self.root / "big.txt").write_text("x" * 30_000, encoding="utf-8")
+        calls = [
+            {"name": "read_file", "arguments": {"path": "big.txt"}} for _ in range(5)
+        ]
+        client = scripted(
+            {"tool_calls": calls},
+            {"tool_calls": [{"name": "finish", "arguments": {"summary": "handled"}}]},
+        )
+        config = HarnessConfig()
+        config.llm.kind = "mock"
+        config.max_tokens = 8000
+        config.compact_threshold = 0.6
+        config.keep_recent_messages = 6
+        config.compact_with_llm = False
+        config.max_depth = 0
+        events = []
+        chat = self.make_chat(client, config=config, events=events)
+        result = chat.send("read it five times")
+        self.assertEqual(result["status"], "done")
+        compactions = [event for event in events if event["type"] == "compaction"]
+        self.assertTrue(compactions, "expected a compaction event")
+        stats = compactions[-1]
+        self.assertGreater(stats["summarized_messages"], 0)
+        self.assertLess(stats["after_tokens"], stats["before_tokens"])
+        self.assertLessEqual(stats["after_tokens"], config.max_tokens)
+        # The batch keeps its pairing and is not dropped wholesale.
+        pending = set()
+        kept_calls = 0
+        for message in chat.messages:
+            if message.get("role") == "assistant":
+                for tool_call in message.get("tool_calls") or []:
+                    pending.add(tool_call["id"])
+                    kept_calls += 1
+            elif message.get("role") == "tool":
+                self.assertIn(message.get("tool_call_id"), pending)
+                pending.discard(message.get("tool_call_id"))
+        self.assertEqual(pending, set())
+        self.assertGreaterEqual(kept_calls, 5)
+        self.assertNotEqual(chat.messages[1]["role"], "tool")
+
+
 class TestCancellation(AgentLoopTestCase):
     def _run_cancelling(self, result):
         holder = {}

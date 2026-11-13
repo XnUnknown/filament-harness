@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.5.
+Version 0.5.6.
 
 ## 1. Purpose
 
@@ -149,13 +149,23 @@ Before each model call:
    later user boundary, cut at the first non-tool message instead; an assistant
    call stays ahead of its own results. The cut never separates an assistant
    tool call from its tool results and never starts the recent window with a
-   dangling tool message.
+   dangling tool message. If the newest turn is one wide tool batch
+   (`spawn_agents`, a parallel read/grep fan-out), the window starts at the
+   assistant message that issued the batch, so every result stays with its call
+   while the older turns are still summarized.
 4. Replace older turns with one summary message:
    - deterministic digest of goals, files, commands, notes, and outcomes;
    - optionally rewritten by the model when `compact_with_llm` is true and the
      loop is the main agent.
-5. If the result is still too large, drop the oldest whole turns, or one safe
+5. If the recent window alone is over budget, prune its large tool results to a
+   short marker before dropping steps, so a wide batch survives with its
+   pairing intact.
+6. If the result is still too large, drop the oldest whole turns, or one safe
    assistant/tool step inside a long turn, without leaving an orphan result.
+
+When the whole history fits inside the keep window there is no turn boundary
+to cut; compaction prunes large tool results instead of returning an
+over-budget prompt unchanged.
 
 Compaction stats and the current context usage are emitted as events, so the UI
 can show the meter and a compaction marker.
@@ -231,7 +241,9 @@ root on `PYTHONPATH`. The protocol is newline-delimited JSON:
 - notification: `{"event": "...", "session_id": "..."}`
 
 `chat`, `answer`, and `skip_question` run on worker threads; the reader remains
-free for `cancel`. A write lock serializes stdout across threads.
+free for `cancel`. A write lock serializes stdout across threads. On stdin EOF
+the server joins any in-flight workers before returning, so a pipe client that
+half-closes stdin after its last request still receives that reply.
 
 Methods: `ping`, `get_config`, `set_config`, `select_workspace`, `get_state`,
 `chat`, `answer`, `skip_question`, `cancel`, `new_session`, `set_mode`,

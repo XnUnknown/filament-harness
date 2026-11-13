@@ -490,13 +490,16 @@ def _discard_line(stream: Any) -> None:
             return
 
 
-def main() -> None:
+def run_server(stdin: BinaryIO, stdout: BinaryIO) -> None:
+    """Serve request lines until ``stdin`` reaches EOF.
+
+    A pipe client may half-close stdin right after its last request.  In-flight
+    ``chat``/``answer`` workers are joined before returning, so their replies
+    still reach that client instead of dying with the process.
+    """
     global EVENT_STREAM
-    # Byte-level UTF-8 framing: redirected stdio on Windows defaults to the
-    # locale codec, which cannot encode most model output.
-    stdin = sys.stdin.buffer
-    stdout = sys.stdout.buffer
     EVENT_STREAM = stdout
+    workers: list[threading.Thread] = []
     while True:
         raw = stdin.readline(MAX_REQUEST_LINE_BYTES + 1)
         if not raw:
@@ -522,9 +525,19 @@ def main() -> None:
                 name="filament-request",
                 daemon=True,
             )
+            workers = [worker for worker in workers if worker.is_alive()]
+            workers.append(thread)
             thread.start()
         else:
             _write_line(stdout, respond(line))
+    for worker in workers:
+        worker.join()
+
+
+def main() -> None:
+    # Byte-level UTF-8 framing: redirected stdio on Windows defaults to the
+    # locale codec, which cannot encode most model output.
+    run_server(sys.stdin.buffer, sys.stdout.buffer)
 
 
 if __name__ == "__main__":

@@ -175,6 +175,94 @@ class TestCompaction(unittest.TestCase):
         self.assertTrue(changed)
         self.assertNotEqual(compacted[-2]["role"], "tool")
 
+    def test_wide_tool_batch_at_the_tail_is_still_summarized(self):
+        # Regression: when the newest turn is one wide tool batch (spawn_agents,
+        # a parallel read/grep fan-out) every message after the keep window is a
+        # tool result.  Advancing past them used to hit the end of the
+        # conversation, so the old code returned without summarizing and the
+        # request stayed far over budget.
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "read the modules and report"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": f"b{index}", "name": "read_file", "arguments": {"path": f"m{index}.py"}}
+                    for index in range(10)
+                ],
+            },
+        ]
+        for index in range(10):
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"b{index}",
+                    "name": "read_file",
+                    "content": "z" * 4000,
+                }
+            )
+        before = estimate_tokens(messages)
+        compacted, changed, stats = compact_messages(
+            None,
+            messages,
+            max_tokens=6000,
+            chars_per_token=4,
+            keep_recent=8,
+            threshold=0.75,
+            use_llm=False,
+        )
+        self.assertTrue(changed)
+        self.assertGreater(stats["summarized_messages"], 0)
+        self.assertIn(SUMMARY_MARKER, compacted[1]["content"])
+        self.assertLess(stats["after_tokens"], before)
+        self.assertLessEqual(stats["after_tokens"], 6000)
+        # The batch survives with its pairing intact; only the fat outputs shrink.
+        batch = next(message for message in compacted if message.get("tool_calls"))
+        self.assertEqual(len(batch["tool_calls"]), 10)
+        self.assert_paired(compacted)
+        self.assertNotEqual(compacted[2]["role"], "tool")
+
+    def test_short_history_over_budget_prunes_instead_of_giving_up(self):
+        # Regression: keep_recent larger than the conversation leaves no turn to
+        # summarize.  Compaction used to return the prompt unchanged and over
+        # budget even though pruning can shrink it without breaking pairing.
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "inspect everything"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": f"s{index}", "name": "read_file", "arguments": {"path": f"f{index}.py"}}
+                    for index in range(6)
+                ],
+            },
+        ]
+        for index in range(6):
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"s{index}",
+                    "name": "read_file",
+                    "content": "z" * 3000,
+                }
+            )
+        before = estimate_tokens(messages)
+        compacted, changed, stats = compact_messages(
+            None,
+            messages,
+            max_tokens=1000,
+            chars_per_token=4,
+            keep_recent=12,
+            threshold=0.75,
+            use_llm=False,
+        )
+        self.assertTrue(changed)
+        self.assertGreater(stats["pruned_results"], 0)
+        self.assertLess(stats["after_tokens"], before)
+        self.assert_paired(compacted)
+
 
 if __name__ == "__main__":
     unittest.main()
