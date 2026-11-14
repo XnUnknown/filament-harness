@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .config import DEFAULT_READ_MAX_CHARS, HarnessConfig, coerce_char_limit, coerce_timeout
-from .shell import prepare_command
+from .shell import command_allowed, prepare_command
 
 
 class Toolbox:
@@ -112,8 +112,7 @@ class Toolbox:
         if len(command) > 20_000:
             raise ValueError("command is too long")
         if self.config.command_allowlist:
-            stripped = command.lstrip()
-            if not any(stripped.startswith(prefix) for prefix in self.config.command_allowlist):
+            if not command_allowed(command, self.config.command_allowlist):
                 raise ValueError("command is not on the configured allowlist")
             if any(ch in command for ch in ("\n", "\r", ";", "|", "&", "`", "$", "<", ">", "(", ")", "{", "}")):
                 raise ValueError("command contains shell metacharacters not permitted with an allowlist")

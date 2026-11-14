@@ -8,8 +8,45 @@ from filament.agent_tools import Toolbox
 from filament.config import HarnessConfig
 from filament.context import ContextBudget
 from filament.llm import MockLLM
-from filament.shell import prepare_command, split_command
+from filament.shell import command_allowed, prepare_command, split_command
 from filament.tools import Toolset
+from filament.toolkit import ToolError, ToolRegistry
+
+
+class TestAllowlistBoundary(unittest.TestCase):
+    """An allowlisted program must match as a word, not as a prefix."""
+
+    def test_command_allowed_requires_a_word_boundary(self):
+        self.assertTrue(command_allowed("echo hi", ["echo"]))
+        self.assertTrue(command_allowed("echo", ["echo"]))
+        self.assertTrue(command_allowed("  echo   hi", ["echo"]))
+        self.assertTrue(command_allowed("python -m pytest", ["python -m"]))
+        self.assertFalse(command_allowed("echoevil hi", ["echo"]))
+        self.assertFalse(command_allowed("python3 -V", ["python"]))
+        self.assertFalse(command_allowed("", ["echo"]))
+        self.assertFalse(command_allowed("echo hi", []))
+
+    def test_toolkit_rejects_a_longer_program_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            registry = ToolRegistry(Path(d), HarnessConfig(command_allowlist=["echo"]))
+            with self.assertRaises(ToolError) as caught:
+                registry.execute("run_shell", {"command": "echoevil hi"})
+            self.assertIn("allowlist", str(caught.exception))
+
+    def test_toolbox_rejects_a_longer_program_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            tools = Toolbox(d, HarnessConfig(use_shell=False, command_allowlist=["echo"]))
+            with self.assertRaises(ValueError) as caught:
+                tools.run_shell("echoevil hi")
+            self.assertIn("allowlist", str(caught.exception))
+
+    def test_toolset_rejects_a_longer_program_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = HarnessConfig(use_shell=False, command_allowlist=["echo"])
+            toolset = Toolset(client=MockLLM(), budget=ContextBudget(), config=cfg, shell_cwd=d)
+            with self.assertRaises(ValueError) as caught:
+                toolset.run_shell("echoevil hi")
+            self.assertIn("allowlist", str(caught.exception))
 
 
 class TestShellCommandValidation(unittest.TestCase):

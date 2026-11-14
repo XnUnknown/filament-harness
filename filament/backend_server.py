@@ -518,8 +518,13 @@ def run_server(stdin: BinaryIO, stdout: BinaryIO) -> None:
         raw = stdin.readline(MAX_REQUEST_LINE_BYTES + 1)
         if not raw:
             break
-        if len(raw) > MAX_REQUEST_LINE_BYTES and not raw.endswith(b"\n"):
-            _discard_line(stdin)
+        if len(raw) > MAX_REQUEST_LINE_BYTES:
+            # `readline` may stop on the cap just before the newline; when the
+            # last byte it returned *is* the newline the frame was one byte too
+            # long and nothing is left to discard, but it must still be
+            # rejected.  Both cases exceed the advertised frame size.
+            if not raw.endswith(b"\n"):
+                _discard_line(stdin)
             _write_line(
                 stdout,
                 _error_response(None, f"request line exceeds {MAX_REQUEST_LINE_BYTES} bytes"),

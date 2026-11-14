@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from .config import HarnessConfig, coerce_timeout
-from .shell import prepare_command
+from .shell import command_allowed, prepare_command
 
 IGNORED_DIRS = {
     ".git",
@@ -179,10 +179,20 @@ def _whitespace_tolerant_pattern(needle: str) -> re.Pattern[str]:
     original text keeps the rest of the file byte-identical; normalizing the
     whole file instead would strip every other line's trailing whitespace and
     turn a one-line edit into a whole-file diff.
+
+    A needle that ends with a newline must match that newline, but must not
+    consume what follows it: a trailing ``[ \\t]*`` used to swallow the next
+    line's indentation, so replacing ``"def f():\\n"`` de-indented the body.
     """
     lines = _normalize_text(needle).split("\n")
+    ends_with_newline = bool(lines) and lines[-1] == ""
+    if ends_with_newline:
+        lines = lines[:-1]
     body = r"[ \t]*\r?\n".join(re.escape(line) + r"[ \t]*" for line in lines)
-    return re.compile(body)
+    if ends_with_newline:
+        # Same line, its own newline, and nothing from the next line.
+        body += r"[ \t]*\r?\n"
+    return re.compile(body if body else r"(?!)")
 
 
 def _match_lines(text: str, needle: str, limit: int = 6) -> list[int]:
@@ -515,6 +525,21 @@ class ToolRegistry:
             return path.relative_to(self.workspace).as_posix()
         except ValueError:
             return str(path)
+
+    def _confined_path(self, path: Path) -> Path | None:
+        """Return ``path`` resolved, or None when it leaves the workspace.
+
+        Used for paths found by walking, where a symlinked file inside the
+        workspace can point at content the read/write tools are not allowed to
+        touch.
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None
+        if not resolved.is_relative_to(self.workspace) and not self.config.allow_outside_target:
+            return None
+        return resolved
 
     def _offload(self, kind: str, text: str) -> str | None:
         if not self.config.offload_shell_output:
@@ -975,10 +1000,17 @@ class ToolRegistry:
             nonlocal total_chars, truncated
             if file_glob and not fnmatch.fnmatch(path.name, file_glob):
                 return True
+            # os.walk does not follow a symlinked directory, but a symlinked
+            # *file* is walked like any other name.  Reading it would return
+            # content from outside the workspace, which read_file refuses;
+            # confine it the same way.
+            resolved = self._confined_path(path)
+            if resolved is None:
+                return True
             try:
-                if path.stat().st_size > 2 * 1024 * 1024:
+                if resolved.stat().st_size > 2 * 1024 * 1024:
                     return True
-                raw = path.read_bytes()
+                raw = resolved.read_bytes()
             except OSError:
                 return True
             if b"\x00" in raw[:4096]:
@@ -1042,8 +1074,7 @@ class ToolRegistry:
         if any(ord(ch) < 32 and ch not in "\t\n\r" for ch in command) or "\x7f" in command:
             raise ToolError("command contains a control character")
         if self.config.command_allowlist:
-            stripped = command.lstrip()
-            if not any(stripped.startswith(prefix) for prefix in self.config.command_allowlist):
+            if not command_allowed(command, self.config.command_allowlist):
                 raise ToolError("command is not on the configured allowlist")
             if any(ch in command for ch in ("\n", "\r", ";", "|", "&", "`", "$", "<", ">", "(", ")", "{", "}")):
                 raise ToolError("command contains shell metacharacters not permitted with an allowlist")
@@ -1087,11 +1118,18 @@ class ToolRegistry:
         if not target.exists():
             raise ToolError(f"file not found: {self._rel(target)}")
         try:
-            compile(target.read_text(encoding="utf-8"), str(target), "exec")
-        except SyntaxError as exc:
-            return f"syntax error: {exc}"
+            source = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolError(
+                f"{self._rel(target)} is not valid UTF-8 (invalid byte at offset {exc.start}); "
+                "convert it to UTF-8 before checking syntax"
+            ) from None
         except OSError as exc:
             raise ToolError(f"could not read {self._rel(target)}: {exc}") from None
+        try:
+            compile(source, str(target), "exec")
+        except SyntaxError as exc:
+            return f"syntax error: {exc}"
         return "syntax ok"
 
     # -- planning and interaction ------------------------------------------

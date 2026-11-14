@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.9.
+Version 0.5.10.
 
 ## 1. Purpose
 
@@ -104,8 +104,7 @@ Tools are declared once in `ToolRegistry` with a JSON Schema and a handler.
 They are filtered by mode and depth:
 
 - plan mode exposes only read-only tools (`read_file`, `list_dir`, `glob`,
-  `grep`, `check_python`, `todo_write`, `ask_user`, read-only subagents,
-  `finish`);
+  `grep`, `check_python`, `todo_write`, `ask_user`, `finish`);
 - subagents do not receive `ask_user` or `spawn_agent` when the depth limit is
   reached.
 
@@ -119,11 +118,12 @@ Tool results are clipped at `tool_output_limit`; the full text is saved under
 `edit_file` and `multi_edit` replace the exact text first. Only when that fails
 does a whitespace-tolerant pattern run against the original file, so a model
 that dropped trailing spaces still gets its edit without the harness rewriting
-unrelated lines. An edit writes the text verbatim: only the replaced span is
-changed, so a file with mixed endings keeps each untouched line's own bytes,
-while the inserted replacement is converted to the file's dominant ending. A
-needle that ends with a newline also matches a last line that has no final
-newline, and the file keeps that state.
+unrelated lines. A needle that ends with a newline must match that newline but
+never consumes the next line's indentation. An edit writes the text verbatim:
+only the replaced span is changed, so a file with mixed endings keeps each
+untouched line's own bytes, while the inserted replacement is converted to the
+file's dominant ending. A needle that ends with a newline also matches a last
+line that has no final newline, and the file keeps that state.
 
 `read_file` reports when a single line is longer than the 60k-char read budget
 and therefore cannot be paged with `offset`; the footer says so instead of
@@ -294,6 +294,10 @@ Environment overrides remain available through `FILAMENT_*` variables. A
 project-local `.env` is read only for the active configuration location, and a
 quoted `"false"` is rejected instead of acting like `true`.
 
+`command_allowlist` matches at a word boundary: an entry `echo` allows
+`echo hi` but not `echoevil`, so a similarly named executable cannot slip past
+the allowlist.
+
 ## 11. Software Requirements Specification
 
 ### 11.1 Functional requirements
@@ -338,9 +342,11 @@ quoted `"false"` is rejected instead of acting like `true`.
 - A failed compaction summary falls back to a deterministic digest.
 - A broken event sink is ignored so a UI problem cannot stop a run.
 - Oversized or malformed backend request lines produce one error response and do
-  not terminate the server.
+  not terminate the server. The advertised frame size is enforced even when
+  `readline` returns the over-cap frame complete with its newline.
 - `edit_file` and `multi_edit` refuse a file that is not valid UTF-8 rather than
-  rewriting every undecodable byte as U+FFFD.
+  rewriting every undecodable byte as U+FFFD; `check_python` reports the same
+  condition as a tool error.
 - Provider tool call ids are sanitized before they are used in offloaded tool
   log names, so an id containing path separators cannot leave `.filament/runs`.
 - An Anthropic-compatible stream that sends the complete tool input in
@@ -365,10 +371,14 @@ quoted `"false"` is rejected instead of acting like `true`.
 - `read_file` names the line that exceeded the read budget instead of reporting
   a range the caller cannot page, and `grep` prints an overlapping context line
   once.
+- An interrupted turn keeps the messages it already recorded, so a later
+  `save()` or `compress()` cannot overwrite them with the pre-turn transcript.
+- `grep` confines files found by walking, so a symlinked file inside the
+  workspace cannot expose content outside it.
 
 ## 13. Verification
 
-- 297 unit tests cover the loop, tools, editing, subagents, question
+- 309 unit tests cover the loop, tools, editing, subagents, question
   pause/resume, compaction, streaming parsers, backend protocol, configuration,
   and the legacy batch runner.
 - The full HTTP streaming path was exercised against a protocol-faithful fake

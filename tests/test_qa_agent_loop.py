@@ -299,5 +299,44 @@ class TestFailedAnswerKeepsTheQuestion(unittest.TestCase):
             self.assertIsNone(chat.session.pending_question)
 
 
+class TestInterruptedTurnKeepsTranscript(unittest.TestCase):
+    """Ctrl+C during a model call must not let the next save erase the turn."""
+
+    class InterruptingClient:
+        supports_tools = True
+        stream = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, prompt, system=None):
+            return "summary"
+
+        def chat(self, messages, tools=None, on_delta=None, cancel=None):
+            self.calls += 1
+            raise KeyboardInterrupt
+
+    def test_keyboard_interrupt_keeps_the_user_message_in_the_orchestrator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = ChatOrchestrator(
+                HarnessConfig(compact_with_llm=False),
+                directory,
+                client=self.InterruptingClient(),
+            )
+            with self.assertRaises(KeyboardInterrupt):
+                chat.send("write the report")
+            self.assertEqual(len(chat.messages), 2)  # system + user
+            self.assertEqual(chat.messages[-1]["role"], "user")
+            self.assertEqual(chat.messages[-1]["content"], "write the report")
+            chat.save()
+            reloaded = ChatOrchestrator(
+                HarnessConfig(compact_with_llm=False),
+                directory,
+                client=self.InterruptingClient(),
+            )
+            reloaded.load_session(chat.session.session_id)
+            self.assertEqual(reloaded.messages[-1]["content"], "write the report")
+
+
 if __name__ == "__main__":
     unittest.main()

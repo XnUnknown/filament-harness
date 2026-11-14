@@ -1,4 +1,5 @@
 """QA regression tests for tool argument validation."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -203,6 +204,72 @@ class TestFuzzyEditPrecision(unittest.TestCase):
                 "edit_file", {"path": "a.py", "old_string": "   ", "new_string": "x"}
             )
         self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\n")
+
+    def test_fuzzy_edit_with_a_trailing_newline_keeps_the_next_line_indented(self):
+        # The needle's newline was matched, then `[ \t]*` swallowed the body's
+        # indentation, so a header edit de-indented the function it opened.
+        path = self.write("win.py", "def f():\r\n    pass\r\n")
+        self.registry.execute(
+            "edit_file",
+            {"path": "win.py", "old_string": "def f():\n", "new_string": "def g():\n"},
+        )
+        self.assertEqual(path.read_bytes(), b"def g():\r\n    pass\r\n")
+
+    def test_fuzzy_edit_with_a_trailing_newline_keeps_the_body_after_trailing_space(self):
+        path = self.write("a.py", "def f(): \n    pass\n")
+        out = self.registry.execute(
+            "edit_file",
+            {"path": "a.py", "old_string": "def f():\n", "new_string": "def g():\n"},
+        )
+        self.assertIn("matched after normalizing", out)
+        self.assertEqual(path.read_bytes(), b"def g():\n    pass\n")
+
+    def test_fuzzy_edit_with_a_trailing_newline_still_requires_the_line_end(self):
+        # A line prefix must not match when the needle asked for a whole line.
+        path = self.write("a.py", "foobar\n")
+        with self.assertRaises(ToolError):
+            self.registry.execute(
+                "edit_file", {"path": "a.py", "old_string": "foo\n", "new_string": "X\n"}
+            )
+        self.assertEqual(path.read_text(encoding="utf-8"), "foobar\n")
+
+
+class ToolkitCheckPythonEncodingTest(unittest.TestCase):
+    def test_non_utf8_file_is_reported_as_a_tool_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            registry = ToolRegistry(Path(d), HarnessConfig())
+            (Path(d) / "latin.py").write_bytes(b"# caf\xe9\nx = 1\n")
+            with self.assertRaises(ToolError) as caught:
+                registry.execute("check_python", {"path": "latin.py"})
+            self.assertIn("not valid UTF-8", str(caught.exception))
+
+
+class ToolkitGrepConfinementTest(unittest.TestCase):
+    def test_confined_path_rejects_a_resolved_path_outside_the_workspace(self):
+        with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as inside:
+            registry = ToolRegistry(Path(inside), HarnessConfig())
+            outside_file = Path(outside) / "secret.txt"
+            outside_file.write_text("leaked-token\n", encoding="utf-8")
+            inside_file = Path(inside) / "ok.txt"
+            inside_file.write_text("fine\n", encoding="utf-8")
+            self.assertIsNone(registry._confined_path(outside_file))
+            self.assertEqual(registry._confined_path(inside_file), inside_file.resolve())
+
+            permissive = ToolRegistry(Path(inside), HarnessConfig(allow_outside_target=True))
+            self.assertEqual(permissive._confined_path(outside_file), outside_file.resolve())
+
+    def test_grep_does_not_read_through_a_symlink_outside_the_workspace(self):
+        with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory() as inside:
+            secret = Path(outside) / "secret.txt"
+            secret.write_text("leaked-token\n", encoding="utf-8")
+            try:
+                os.symlink(secret, Path(inside) / "link.txt")
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are not available on this host")
+            registry = ToolRegistry(Path(inside), HarnessConfig())
+            self.assertIn("no matches", registry.execute("grep", {"pattern": "leaked-token"}))
+            with self.assertRaises(ToolError):
+                registry.execute("read_file", {"path": "link.txt"})
 
 
 if __name__ == "__main__":

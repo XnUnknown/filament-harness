@@ -30,6 +30,31 @@ def split_command(command: str) -> list[str]:
     return argv
 
 
+def command_allowed(command: str, allowlist: list[str] | tuple[str, ...]) -> bool:
+    """True when ``command`` runs a program on the allowlist.
+
+    The match must end at a word boundary.  A plain ``startswith`` let
+    ``echoevil hi`` through an allowlist of ``["echo"]``, so any similarly
+    named executable in the workspace or on PATH was runnable in allowlist
+    mode.  An entry may include fixed arguments (``"python -m"``); the
+    boundary then falls after the last entry character.
+    """
+    if not isinstance(command, str):
+        return False
+    stripped = command.lstrip()
+    if not stripped:
+        return False
+    for raw in allowlist or ():
+        entry = str(raw).strip()
+        if not entry:
+            continue
+        if stripped == entry:
+            return True
+        if stripped.startswith(entry) and stripped[len(entry)].isspace():
+            return True
+    return False
+
+
 def prepare_command(command: str, use_shell: bool) -> str | list[str]:
     """Return the form ``subprocess.run`` should receive for this command."""
     if use_shell:

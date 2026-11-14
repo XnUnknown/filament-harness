@@ -120,6 +120,28 @@ class TestBackendProcess(unittest.TestCase):
 
 
 class TestBackendServerLoop(unittest.TestCase):
+    def test_frame_one_byte_over_the_cap_is_rejected(self):
+        # A line whose newline lands exactly on readline's cap used to be
+        # accepted: the old check only rejected over-cap lines that did *not*
+        # end with a newline.
+        prefix = b'{"id": 9, "method": "ping", "params": {"pad": "'
+        suffix = b'"}}\n'
+        over = backend_server.MAX_REQUEST_LINE_BYTES + 1
+        line = prefix + b"x" * (over - len(prefix) - len(suffix)) + suffix
+        self.assertEqual(len(line), over)
+        stdin = io.BytesIO(line + b'{"id": 10, "method": "ping"}\n')
+        stdout = io.BytesIO()
+        try:
+            backend_server.run_server(stdin, stdout)
+        finally:
+            backend_server.EVENT_STREAM = None
+        replies = [json.loads(item) for item in stdout.getvalue().decode("utf-8").splitlines()]
+        self.assertEqual(len(replies), 2)
+        self.assertFalse(replies[0]["ok"])
+        self.assertIn("exceeds", replies[0]["error"])
+        self.assertTrue(replies[1]["ok"])
+        self.assertEqual(replies[1]["id"], 10)
+
     def test_async_reply_survives_stdin_eof(self):
         # A pipe client that sends one chat request and closes stdin used to
         # lose the reply: main() returned on EOF and the daemon worker died.

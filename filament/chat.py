@@ -234,6 +234,11 @@ class ChatOrchestrator:
             result = loop.run(message)
         finally:
             self._active = None
+            # An interrupted turn (Ctrl+C) still extended the loop's transcript
+            # and persisted it.  Keep the orchestrator's copy in step, or a
+            # later save()/compress() writes the pre-turn messages over that
+            # progress.
+            self.messages = list(loop.messages)
         self.history.append(message)
         return self._adopt(loop, result)
 
@@ -250,6 +255,7 @@ class ChatOrchestrator:
             result = loop.resume(str(text))
         finally:
             self._active = None
+            self.messages = list(loop.messages)
         return self._adopt(loop, result)
 
     def skip_question(self, question_id: str) -> dict[str, Any]:
