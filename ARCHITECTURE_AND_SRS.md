@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.10.
+Version 0.5.11.
 
 ## 1. Purpose
 
@@ -130,6 +130,12 @@ and therefore cannot be paged with `offset`; the footer says so instead of
 implying the whole line was returned. `grep` merges overlapping context windows
 so a line that is both context for one match and a match for another is printed
 once, with the `:` marker.
+
+Shell tools run with stdin closed (`subprocess.DEVNULL`). In `filament serve`
+stdin is the JSON request pipe, so a command that reads stdin (`cat`,
+`python script.py`, a prompting installer) used to consume request lines and the
+matching replies never arrived. A command that needs input fails fast instead of
+eating the harness's own stream.
 
 ## 5. Subagents
 
@@ -311,7 +317,7 @@ the allowlist.
 | FR-5 | The system shall preserve the pairing of assistant tool calls and tool results across compaction. |
 | FR-6 | The system shall give every subagent its own session, history, budget, and step limit. |
 | FR-7 | The system shall return a subagent's final summary to the parent as a tool result. |
-| FR-8 | The system shall pause on `ask_user` and resume with the user's answer. |
+| FR-8 | The system shall pause on `ask_user` and resume with the user's answer; a terminal REPL that loads a session with a question still pending asks it before sending the next message. |
 | FR-9 | The system shall stop on `finish`, cancellation, step limits, or repeated tool-call stalls. |
 | FR-10 | The system shall persist session state atomically, including parent links and pending questions. |
 | FR-11 | The system shall stream JSON notifications while a turn runs. |
@@ -378,7 +384,7 @@ the allowlist.
 
 ## 13. Verification
 
-- 309 unit tests cover the loop, tools, editing, subagents, question
+- 313 unit tests cover the loop, tools, editing, subagents, question
   pause/resume, compaction, streaming parsers, backend protocol, configuration,
   and the legacy batch runner.
 - The full HTTP streaming path was exercised against a protocol-faithful fake

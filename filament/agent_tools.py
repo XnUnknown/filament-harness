@@ -132,6 +132,9 @@ class Toolbox:
                 text=True,
                 timeout=resolved_timeout,
                 errors="replace",
+                # The backend's stdin is the JSON request pipe; a command that
+                # reads stdin must not consume it.
+                stdin=subprocess.DEVNULL,
             )
             output = (completed.stdout or "") + (completed.stderr or "")
             if len(output) > self.config.max_shell_output:

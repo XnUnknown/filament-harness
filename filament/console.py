@@ -215,7 +215,40 @@ class AgentConsole:
         self.chat.set_event_sink(self.renderer)
         self.input_fn = input_fn
 
+    def _drain_pending_question(self) -> None:
+        """Answer a question a loaded session left pending.
+
+        Quitting at a question prompt persists ``pending_question`` in the
+        session file.  ``send`` correctly refuses to run while it is set, but
+        this REPL had no other answer path, so every later message raised and
+        only ``/new`` escaped.  The question is shown here and the answer
+        resumes the interrupted turn.
+        """
+        while True:
+            pending = getattr(self.chat.session, "pending_question", None)
+            if not pending:
+                return
+            prompt = f"? {pending.get('question', 'Question')}\n> "
+            try:
+                answer = self.input_fn(prompt).strip()
+            except (EOFError, KeyboardInterrupt):
+                # No answer available.  Drop the question so the session can
+                # continue; the unanswered tool call is repaired on the next
+                # send, exactly as a cancelled question is.
+                self.chat.cancel()
+                return
+            question_id = str(pending.get("id") or "")
+            result = (
+                self.chat.answer(question_id, answer)
+                if answer
+                else self.chat.skip_question(question_id)
+            )
+            if result.get("status") != "awaiting_input":
+                return
+
     def run_turn(self, message: str) -> dict[str, Any]:
+        if getattr(self.chat.session, "pending_question", None):
+            self._drain_pending_question()
         result = self.chat.send(message)
         # Keep answering until the turn actually ends.  A fixed number of
         # rounds left the session holding a pending question that this REPL

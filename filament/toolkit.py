@@ -1092,6 +1092,11 @@ class ToolRegistry:
                 text=True,
                 timeout=timeout,
                 errors="replace",
+                # Never inherit the harness's stdin.  In `filament serve` that
+                # stream is the JSON request pipe, so a command that reads stdin
+                # (`cat`, `python script.py`, a prompting installer) swallowed
+                # request lines and the matching replies never arrived.
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired as exc:
             partial = str(exc.stdout or "") + str(exc.stderr or "")

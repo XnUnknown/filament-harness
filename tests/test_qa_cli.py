@@ -10,7 +10,7 @@ from filament.chat import ChatOrchestrator
 from filament.cli import _run_batch, build_parser
 from filament.config import HarnessConfig
 from filament.console import AgentConsole, ConsoleRenderer
-from filament.llm import ChatResult, ToolCall
+from filament.llm import ChatResult, MockLLM, ToolCall
 from filament.tui import _prompt_choice
 
 
@@ -107,7 +107,6 @@ class TestPromptChoice(unittest.TestCase):
 
 class TestQuestionPacing(unittest.TestCase):
     """A long chain of questions must not strand the REPL on a pending one."""
-
     class AskThenFinish:
         supports_tools = True
         stream = False
@@ -153,6 +152,101 @@ class TestQuestionPacing(unittest.TestCase):
         self.assertEqual(result["content"], "finished")
         self.assertIsNone(pending)
         self.assertEqual(follow_up["status"], "done")
+
+
+class TestReloadedPendingQuestion(unittest.TestCase):
+    """A question left pending on disk must not strand a reloaded session.
+
+    Quitting (or crashing) at a question prompt leaves ``pending_question`` in
+    the session file.  Loading that session and typing a message used to raise
+    "a question is waiting for an answer; call answer() first" for every later
+    message, because the REPL had no answer path.
+    """
+
+    @staticmethod
+    def _ask_client():
+        return MockLLM(
+            script=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "q1", "name": "ask_user", "arguments": {"question": "Which name?"}}
+                    ],
+                }
+            ]
+        )
+
+    @staticmethod
+    def _finish_client():
+        return MockLLM(
+            script=[{"tool_calls": [{"name": "finish", "arguments": {"summary": "named"}}]}]
+        )
+
+    def _load_stuck_session(self, directory, client):
+        config = HarnessConfig(compact_with_llm=False)
+        first = ChatOrchestrator(config, directory, client=self._ask_client())
+        result = first.send("name it")
+        self.assertEqual(result["status"], "awaiting_input")
+        self.assertTrue(first.session.pending_question)
+        revived = ChatOrchestrator(config, directory, client=client)
+        revived.load_session(first.session.session_id)
+        self.assertTrue(revived.session.pending_question)
+        return revived
+
+    def test_the_loaded_question_is_asked_and_answered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revived = self._load_stuck_session(directory, self._finish_client())
+            prompts: list[str] = []
+
+            def answer(prompt):
+                prompts.append(prompt)
+                return "alpha"
+
+            console = AgentConsole(
+                revived,
+                renderer=ConsoleRenderer(stream=io.StringIO()),
+                input_fn=answer,
+            )
+            result = console.run_turn("carry on")
+
+            self.assertEqual(result["status"], "done", result)
+            self.assertEqual(len(prompts), 1)
+            self.assertIn("Which name?", prompts[0])
+            self.assertIsNone(revived.session.pending_question)
+            # The answer resumed the interrupted turn: its result is paired with
+            # the ask_user call instead of being sent as a bare user message.
+            answers = [
+                message
+                for message in revived.messages
+                if message.get("role") == "tool" and message.get("tool_call_id") == "q1"
+            ]
+            self.assertEqual([message["content"] for message in answers], ["alpha"])
+
+    def test_no_answer_at_the_loaded_question_still_lets_the_next_message_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revived = self._load_stuck_session(directory, self._finish_client())
+
+            def no_input(_prompt):
+                raise EOFError
+
+            console = AgentConsole(
+                revived,
+                renderer=ConsoleRenderer(stream=io.StringIO()),
+                input_fn=no_input,
+            )
+            result = console.run_turn("carry on")
+
+            self.assertEqual(result["status"], "done", result)
+            self.assertIsNone(revived.session.pending_question)
+            # The orphaned call is closed with an explicit result, not left for
+            # the provider to reject.
+            closed = [
+                message
+                for message in revived.messages
+                if message.get("role") == "tool" and message.get("tool_call_id") == "q1"
+            ]
+            self.assertEqual(len(closed), 1)
+            self.assertIn("did not answer", closed[0]["content"])
 
 
 if __name__ == "__main__":

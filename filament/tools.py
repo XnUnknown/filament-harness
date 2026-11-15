@@ -61,6 +61,9 @@ class Toolset:
                 text=True,
                 timeout=resolved_timeout,
                 errors="replace",
+                # Batch runs share stdin with whatever launched them; a command
+                # that reads it must not eat the caller's input stream.
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired as exc:
             partial = str(exc.stdout or "") + str(exc.stderr or "")

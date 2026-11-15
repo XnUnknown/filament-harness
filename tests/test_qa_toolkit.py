@@ -272,5 +272,75 @@ class ToolkitGrepConfinementTest(unittest.TestCase):
                 registry.execute("read_file", {"path": "link.txt"})
 
 
+class ShellStdinInheritanceTest(unittest.TestCase):
+    """A shell tool must not read the harness's own stdin.
+
+    In ``filament serve`` stdin is the newline-delimited JSON protocol.  A
+    command that reads stdin (``python script.py``, ``cat``, ``git commit``
+    without ``-m``) inherited that pipe and consumed request lines, so the
+    matching replies never arrived and the UI hung.
+    """
+
+    MARKER = "REQUEST LINE THAT MUST SURVIVE"
+
+    def _run_helper(self, helper_code):
+        import subprocess
+        import sys
+
+        project_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "helper.py"
+            helper.write_text(
+                f"import sys\nsys.path.insert(0, {str(project_root)!r})\n" + helper_code,
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [sys.executable, str(helper), str(root)],
+                input=(self.MARKER + "\n").encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
+
+    @staticmethod
+    def _reader_command():
+        import sys
+
+        program = "import sys; data = sys.stdin.read(); print('CHILD_SAW', len(data))"
+        return f'{sys.executable} -c "{program}"'
+
+    def _assert_marker_survived(self, setup, invoke):
+        command = self._reader_command()
+        body = (
+            "from pathlib import Path\n"
+            "from filament.config import HarnessConfig\n"
+            + setup.replace("{command}", repr(command))
+            + invoke.replace("{command}", repr(command))
+            + "\nprint('PARENT_REMAINING=' + repr(sys.stdin.read()))\n"
+        )
+        proc = self._run_helper(body)
+        output = proc.stdout.decode("utf-8", "replace")
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertIn("CHILD_SAW 0", output)
+        self.assertIn("PARENT_REMAINING=" + repr(self.MARKER + "\n"), output)
+
+    def test_the_agent_shell_tool_does_not_consume_harness_stdin(self):
+        self._assert_marker_survived(
+            "from filament.toolkit import ToolRegistry\n"
+            "config = HarnessConfig()\nconfig.validate()\n"
+            "registry = ToolRegistry(Path(sys.argv[1]), config)\n",
+            "print(registry.execute('run_shell', {'command': {command}, 'timeout': 30}))\n",
+        )
+
+    def test_the_backend_toolbox_shell_does_not_consume_harness_stdin(self):
+        self._assert_marker_survived(
+            "from filament.agent_tools import Toolbox\n"
+            "config = HarnessConfig()\nconfig.validate()\n"
+            "registry = Toolbox(Path(sys.argv[1]), config)\n",
+            "print(registry.run_shell({command}, timeout=30))\n",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
