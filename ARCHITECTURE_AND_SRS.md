@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.13.
+Version 0.5.14.
 
 ## 1. Purpose
 
@@ -130,6 +130,11 @@ and therefore cannot be paged with `offset`; the footer says so instead of
 implying the whole line was returned. `grep` merges overlapping context windows
 so a line that is both context for one match and a match for another is printed
 once, with the `:` marker.
+
+`write_file` writes the content it was given: an empty string creates a truly
+empty file (not a one-byte blank line), a missing final newline is added, and
+the reported line count is the number of lines on disk rather than newline
+characters plus one.
 
 Shell tools run with stdin closed (`subprocess.DEVNULL`). In `filament serve`
 stdin is the JSON request pipe, so a command that reads stdin (`cat`,
@@ -296,7 +301,11 @@ The renderer is event-driven and holds no Node access. It renders assistant
 deltas, tool cards, nested subagent streams, todos, context, questions, and a
 final done summary. History is rebuilt from stored neutral messages, pairing
 each tool result with the assistant turn it immediately follows rather than
-through one global id map.
+through one global id map. A question card is located by comparing its
+`data-question-id` dataset value, not by interpolating the id into a CSS
+selector, because a hand-edited session can carry any string as the id. An
+`ask_user` result flagged `is_error` is rendered as "question was not answered"
+instead of being shown as a reply on reload.
 
 ## 10. Configuration
 

@@ -636,7 +636,14 @@ class ToolRegistry:
             raise ToolError(f"could not write {self._rel(target)}: {exc}") from None
         self._note_change(target)
         action = "overwrote" if existed else "created"
-        return f"{action} {self._rel(target)} ({len(content)} chars, {content.count(chr(10)) + 1} lines)"
+        # Count real lines, not newline characters.  A file that ends with a
+        # newline ("a\n") has one line, and an empty file has none; counting
+        # "\n" + 1 reported one extra line for every normal write.
+        lines = len(content.splitlines())
+        return (
+            f"{action} {self._rel(target)} ({len(content)} chars, "
+            f"{lines} line{'s' if lines != 1 else ''})"
+        )
 
     def _write_text(
         self,
@@ -654,7 +661,10 @@ class ToolRegistry:
         rewritten to the dominant ending).  The inserted text is matched to the
         file's ending by :meth:`_replace` instead.
         """
-        if final_newline and not content.endswith("\n"):
+        if final_newline and content and not content.endswith("\n"):
+            # An empty file must stay empty: appending a newline to "" created
+            # a one-byte file, so a model clearing or creating a placeholder
+            # could not produce a truly empty file.
             content += "\n"
         if newline == "\r\n":
             # Keep the file's existing line endings: rewriting a CRLF file as

@@ -414,7 +414,7 @@
   function renderQuestion(question) {
     if (!question || !question.id) return;
     const existing = Array.from(document.querySelectorAll(".question")).find(
-      (node) => node.dataset.questionId === question.id
+      (node) => node.dataset.questionId === String(question.id)
     );
     if (existing) {
       S.pendingQuestion = question;
@@ -640,7 +640,13 @@
   async function answerQuestion(answer) {
     if (S.busy || !S.pendingQuestion) return;
     const question = S.pendingQuestion;
-    const card = document.querySelector(`.question[data-question-id="${question.id}"]`);
+    // Match by dataset value instead of interpolating the id into a CSS
+    // selector: a hand-edited session can carry any string as the question id,
+    // and a quote made querySelector throw before the request was sent, leaving
+    // the card impossible to answer.
+    const card = Array.from(document.querySelectorAll(".question")).find(
+      (node) => node.dataset.questionId === String(question.id)
+    );
     // Keep the card until the backend accepts the answer. Marking it answered
     // up front left a dead card and a stuck composer when the request failed,
     // even though the session still had the question pending.
@@ -727,7 +733,18 @@
           }
           if (call.name === "ask_user") {
             const answer = results.get(call.id);
-            if (answer) addSystem(`You answered: ${answer.content}`, "answer");
+            // A question the user never answered is closed with an is_error
+            // "not executed" tool result; showing that as an answer rewrote
+            // history on reload.
+            if (answer) {
+              const unanswered =
+                answer.is_error ||
+                String(answer.content || "").startsWith("Not executed");
+              addSystem(
+                unanswered ? "Question was not answered." : `You answered: ${answer.content}`,
+                "answer"
+              );
+            }
             continue;
           }
           const result = results.get(call.id);
