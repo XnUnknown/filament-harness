@@ -16,6 +16,7 @@ import json
 import platform
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -501,7 +502,12 @@ class AgentLoop:
                     break
 
             if pending is not None:
-                pending_id = f"q_{int(time.time())}_{self.steps}"
+                # The renderer keys question cards by this id.  A wall-clock
+                # second plus the step counter repeats across turns (steps reset
+                # every turn), and a repeated id made a new question reuse the
+                # previous, already-answered card: the composer stayed disabled
+                # with no answerable form.  The id must be unique per session.
+                pending_id = "q_" + uuid.uuid4().hex[:12]
                 self.session.pending_question = {
                     "id": pending_id,
                     "tool_call_id": pending_call_id,

@@ -114,6 +114,12 @@ class Session:
             if self.pending_question is not None and self.status == "awaiting_input":
                 self.status = "idle"
             self.pending_question = None
+        if self.status == "running":
+            # The only writer of a "running" status is a live loop, so a value
+            # read back from disk can only describe a turn whose process died.
+            # Nothing can stop or join that run, and showing it as running in
+            # the session list or status line is stale; report idle instead.
+            self.status = "idle"
         if not isinstance(self.title, str):
             self.title = str(self.title or "")
         now = time.time()
@@ -237,14 +243,71 @@ def list_sessions(
     return sessions
 
 
-def delete_session(session_id: str, cwd: str | Path) -> bool:
+def _session_children(path: Path, directory: Path, parent_id: str) -> list[str]:
+    """Return child session ids that still name ``parent_id`` as their parent.
+
+    The parent link is checked before deleting anything: a copied or hand-edited
+    session file must not be able to take an unrelated session down with it.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("child_sessions")
+    if not isinstance(raw, list):
+        return []
+    children: list[str] = []
+    for item in raw:
+        try:
+            child_id = _safe_session_id(item)
+        except ValueError:
+            continue
+        child_path = (directory / f"{child_id}.json").resolve()
+        if not child_path.is_relative_to(directory) or not child_path.exists():
+            continue
+        try:
+            child_data = json.loads(child_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(child_data, dict) and child_data.get("parent_id") == parent_id:
+            children.append(child_id)
+    return children
+
+
+def delete_session(
+    session_id: str,
+    cwd: str | Path,
+    *,
+    _seen: set[str] | None = None,
+) -> bool:
+    """Delete a session and the subagent sessions it created.
+
+    Subagent sessions are hidden from the session list, so deleting only the
+    main file left them on disk with no way to remove them from the UI.  The
+    walk is cycle-safe and only follows a child link whose file still points
+    back at the session being deleted.
+    """
     safe_id = _safe_session_id(session_id)
     directory = session_dir(cwd).resolve()
     path = (directory / f"{safe_id}.json").resolve()
     if not path.is_relative_to(directory):
         raise ValueError("session path escapes session directory")
-    if path.exists():
-        path.unlink()
-        return True
-    return False
+    seen = _seen if _seen is not None else set()
+    if safe_id in seen:
+        return False
+    seen.add(safe_id)
+    if not path.exists():
+        return False
+    children = _session_children(path, directory, safe_id)
+    path.unlink()
+    for child_id in children:
+        try:
+            delete_session(child_id, cwd, _seen=seen)
+        except (OSError, ValueError):
+            # The parent is already gone; a child that cannot be removed must
+            # not report the whole delete as failed.
+            continue
+    return True
 

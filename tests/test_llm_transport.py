@@ -106,6 +106,15 @@ class TestReadErrorBody(unittest.TestCase):
         self.assertTrue(text.endswith(" [truncated]"))
         self.assertEqual(len(text), MAX_ERROR_BODY_BYTES + len(" [truncated]"))
 
+    def test_error_body_is_closed_after_reading(self):
+        import io
+
+        # Every caller drops the HTTPError right after this helper, so a body
+        # left open leaked its socket until the garbage collector ran.
+        response = io.BytesIO(b"boom")
+        self.assertEqual(_read_error_body(response), "boom")  # type: ignore[arg-type]
+        self.assertTrue(response.closed)
+
 
 class TestProviderResponseCap(unittest.TestCase):
     def setUp(self):

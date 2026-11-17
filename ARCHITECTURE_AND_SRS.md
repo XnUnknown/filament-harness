@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.11.
+Version 0.5.12.
 
 ## 1. Purpose
 
@@ -214,7 +214,21 @@ Writes use a temporary file and atomic replace. Old session files missing new
 fields load with defaults; unknown fields are ignored. Loaded container fields
 are normalized: non-object messages, unknown roles, tool results without an id,
 and pending questions that cannot be answered are dropped, so one corrupt file
-cannot break the session list or the next turn.
+cannot break the session list or the next turn. A saved `status` of `running`
+loads as `idle`: only the process that wrote the file could have been running
+that turn, and at load time it is gone.
+
+Question ids are random per session rather than `int(time.time())` plus the step
+counter. The renderer keys question cards by id; the step counter resets every
+turn, so two questions asked in the same second reused the id of an earlier,
+already answered card, and the new question rendered nowhere while the composer
+stayed disabled.
+
+`delete_session` also removes the subagent sessions the deleted session created.
+It follows a `child_sessions` entry only when the child file still names the
+session as its `parent_id`, and a visited set stops a hand-edited cycle. Subagent
+sessions are hidden from the session list, so leaving them behind made them
+impossible to remove from the UI and CLI.
 
 Before the next model call the loop repairs pairing in both directions: a tool
 call with no result gets an explicit "not executed" result, and a tool result

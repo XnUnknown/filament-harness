@@ -9,7 +9,13 @@ from filament.context import ContextBudget
 from filament.files import append_code, replace_line
 from filament.llm import MockLLM
 from filament.review import review_file
-from filament.session import _safe_session_id
+from filament.session import (
+    _safe_session_id,
+    create_session,
+    delete_session,
+    load_session,
+    save_session,
+)
 from filament.tools import Toolset
 
 
@@ -105,6 +111,68 @@ class TestQARegressions(unittest.TestCase):
             result = toolset.run_shell(command, timeout=60)
             self.assertIn("exit_code: 0", result)
             self.assertIn("424242", result)
+
+
+class TestSessionLifecycleRegressions(unittest.TestCase):
+    """Session files must not leak child transcripts or a stale run status."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.directory = self.root / ".filament" / "sessions"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_deleting_a_parent_removes_its_subagent_sessions(self):
+        parent = create_session(self.root)
+        child = create_session(self.root, parent_id=parent.session_id, kind="subagent")
+        grandchild = create_session(self.root, parent_id=child.session_id, kind="subagent")
+        parent.child_sessions = [child.session_id]
+        child.child_sessions = [grandchild.session_id]
+        for session in (parent, child, grandchild):
+            save_session(session, self.root)
+        self.assertEqual(len(list(self.directory.glob("*.json"))), 3)
+
+        self.assertTrue(delete_session(parent.session_id, self.root))
+
+        # Child sessions are hidden from the session list, so a delete that
+        # left them behind put them beyond any cleanup the UI could offer.
+        self.assertEqual(list(self.directory.glob("*.json")), [])
+
+    def test_a_forged_child_link_does_not_delete_an_unrelated_session(self):
+        parent = create_session(self.root)
+        other = create_session(self.root)
+        parent.child_sessions = [other.session_id]
+        save_session(parent, self.root)
+        save_session(other, self.root)
+
+        self.assertTrue(delete_session(parent.session_id, self.root))
+
+        self.assertTrue((self.directory / f"{other.session_id}.json").exists())
+
+    def test_a_corrupt_child_cycle_stops(self):
+        first = create_session(self.root)
+        second = create_session(self.root, parent_id=first.session_id, kind="subagent")
+        # A hand-edited pair of files that each claim the other as its child.
+        first.child_sessions = [second.session_id]
+        second.child_sessions = [first.session_id]
+        save_session(first, self.root)
+        save_session(second, self.root)
+
+        self.assertTrue(delete_session(first.session_id, self.root))
+
+        self.assertEqual(list(self.directory.glob("*.json")), [])
+
+    def test_a_persisted_running_status_loads_as_idle(self):
+        session = create_session(self.root)
+        session.status = "running"
+        save_session(session, self.root)
+
+        loaded = load_session(session.session_id, self.root)
+
+        # The process that wrote "running" is gone; nothing can join that run.
+        self.assertEqual(loaded.status, "idle")
 
 
 class TestEditingAndContextRegressions(unittest.TestCase):

@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from filament.agent_loop import AgentLoop
 from filament.chat import ChatOrchestrator
@@ -297,6 +298,63 @@ class TestFailedAnswerKeepsTheQuestion(unittest.TestCase):
             second = chat.answer(question_id, "blue")
             self.assertEqual(second["status"], "done")
             self.assertIsNone(chat.session.pending_question)
+
+
+class TestQuestionIdsAreUnique(unittest.TestCase):
+    """Two questions in one session must never share an id.
+
+    The Electron renderer keys question cards by ``data-question-id``.  Ids were
+    built from ``int(time.time())`` plus the step counter, and the step counter
+    resets every turn, so a second question asked in the same wall-clock second
+    at the same step reused the id of the first, already answered card: the new
+    question rendered nowhere and the composer stayed disabled.
+    """
+
+    class AskTwiceClient:
+        supports_tools = True
+        stream = False
+
+        def __init__(self):
+            self.turns = 0
+
+        def generate(self, prompt, system=None):
+            return "summary"
+
+        def chat(self, messages, tools=None, on_delta=None, cancel=None):
+            self.turns += 1
+            if self.turns <= 2:
+                return ChatResult(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id=f"call_{self.turns}",
+                            name="ask_user",
+                            arguments={"question": f"question {self.turns}"},
+                        )
+                    ],
+                )
+            return ChatResult(content="finished")
+
+    def test_questions_asked_in_the_same_second_get_distinct_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = ChatOrchestrator(
+                HarnessConfig(compact_with_llm=False),
+                directory,
+                client=self.AskTwiceClient(),
+            )
+            # Pin the clock the old id generator used; the ids must not collide
+            # even when both questions are asked in the same second.
+            with patch("filament.agent_loop.time.time", return_value=1_700_000_000.0):
+                first = chat.send("ask me")
+                first_id = (first.get("question") or {}).get("id") or ""
+                second = chat.answer(first_id, "one")
+                second_id = (second.get("question") or {}).get("id") or ""
+                done = chat.answer(second_id, "two")
+
+        self.assertTrue(first_id)
+        self.assertTrue(second_id)
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(done["status"], "done")
 
 
 class TestInterruptedTurnKeepsTranscript(unittest.TestCase):

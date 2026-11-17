@@ -106,15 +106,28 @@ def _read_body(resp: Any, provider: str, limit: int = MAX_RESPONSE_BYTES) -> byt
 
 
 def _read_error_body(exc: urllib.error.HTTPError, limit: int = MAX_ERROR_BODY_BYTES) -> str:
-    """Read a bounded prefix of an HTTP error body for diagnostics."""
+    """Read a bounded prefix of an HTTP error body for diagnostics.
+
+    The error response is closed here.  Every caller converts it to a
+    RuntimeError and drops the HTTPError immediately, so leaving it open leaked
+    the socket until the garbage collector ran (visible as a ResourceWarning).
+    """
     try:
-        raw = exc.read(limit + 1)
-    except (OSError, ValueError):
-        return ""
-    text = raw[:limit].decode(errors="replace")
-    if len(raw) > limit:
-        text += " [truncated]"
-    return text
+        try:
+            raw = exc.read(limit + 1)
+        except (OSError, ValueError):
+            return ""
+        text = raw[:limit].decode(errors="replace")
+        if len(raw) > limit:
+            text += " [truncated]"
+        return text
+    finally:
+        close = getattr(exc, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - closing is best-effort
+                pass
 
 
 def _text(content: Any) -> str:
