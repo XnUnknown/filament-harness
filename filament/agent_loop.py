@@ -727,7 +727,19 @@ class AgentLoop:
                 index += 1
                 continue
             raw_calls = message.get("tool_calls")
-            if not isinstance(raw_calls, list) or not raw_calls:
+            if raw_calls is None:
+                index += 1
+                continue
+            if not isinstance(raw_calls, list):
+                # A scalar tool_calls value survives a hand-edited session and
+                # every adapter would iterate it (TypeError, or an empty
+                # tool_calls list on the wire).  Normalize it away here, before
+                # the next model call, just like an unnamed call below.
+                message.pop("tool_calls", None)
+                repaired += 1
+                index += 1
+                continue
+            if not raw_calls:
                 index += 1
                 continue
             calls: list[dict[str, Any]] = []

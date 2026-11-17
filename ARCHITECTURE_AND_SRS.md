@@ -1,6 +1,6 @@
 # Filament Harness — Architecture and SRS
 
-Version 0.5.12.
+Version 0.5.13.
 
 ## 1. Purpose
 
@@ -213,10 +213,15 @@ Sessions are JSON files at `.filament/sessions/<id>.json`:
 Writes use a temporary file and atomic replace. Old session files missing new
 fields load with defaults; unknown fields are ignored. Loaded container fields
 are normalized: non-object messages, unknown roles, tool results without an id,
-and pending questions that cannot be answered are dropped, so one corrupt file
-cannot break the session list or the next turn. A saved `status` of `running`
-loads as `idle`: only the process that wrote the file could have been running
-that turn, and at load time it is gone.
+a non-list `tool_calls` value (and non-object entries inside a call list), and
+pending questions that cannot be answered are dropped, so one corrupt file
+cannot break the session list or the next turn. Pending question options are
+normalized to a short string list and the question to text, because the
+renderer iterates and prints both. Token estimation tolerates a junk entry and
+runs before the first model call, so a malformed transcript degrades to text
+instead of crashing loop construction or `state()`. A saved `status` of
+`running` loads as `idle`: only the process that wrote the file could have been
+running that turn, and at load time it is gone.
 
 Question ids are random per session rather than `int(time.time())` plus the step
 counter. The renderer keys question cards by id; the step counter resets every

@@ -34,12 +34,21 @@ def _content_text(message: dict[str, Any]) -> str:
 
 
 def message_tokens(message: dict[str, Any], chars_per_token: int = 4) -> int:
+    # Token estimation runs before any provider call (loop construction,
+    # ``state()``, compaction), so it must never be the thing that crashes on a
+    # junk session entry.  A hand-edited session can carry a non-dict message or
+    # a non-list ``tool_calls`` value; neither has a sensible token count, so
+    # count the content only.
+    if not isinstance(message, dict):
+        return 1
     total = len(_content_text(message))
-    for call in message.get("tool_calls") or []:
-        if isinstance(call, dict):
-            total += len(str(call.get("name", ""))) + len(
-                json.dumps(call.get("arguments") or {}, ensure_ascii=False)
-            )
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for call in tool_calls:
+            if isinstance(call, dict):
+                total += len(str(call.get("name", ""))) + len(
+                    json.dumps(call.get("arguments") or {}, ensure_ascii=False)
+                )
     return max(1, total // max(1, chars_per_token))
 
 

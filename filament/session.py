@@ -40,6 +40,22 @@ def _clean_messages(value: Any) -> list[dict[str, Any]]:
             continue
         if role == "tool" and not str(item.get("tool_call_id") or ""):
             continue
+        calls = item.get("tool_calls")
+        if calls is not None:
+            if not isinstance(calls, list):
+                # A scalar here used to survive loading and then crash token
+                # estimation (loop construction / state()) and the renderer's
+                # history rebuild before any provider could reject it.
+                item = dict(item)
+                item.pop("tool_calls", None)
+            else:
+                valid = [call for call in calls if isinstance(call, dict)]
+                if len(valid) != len(calls):
+                    item = dict(item)
+                    if valid:
+                        item["tool_calls"] = valid
+                    else:
+                        item.pop("tool_calls", None)
         cleaned.append(item)
     return cleaned
 
@@ -103,15 +119,28 @@ class Session:
         self.child_sessions = _clean_str_list(self.child_sessions)
         if not isinstance(self.usage, dict):
             self.usage = {}
-        pending_valid = (
-            isinstance(self.pending_question, dict)
-            and bool(str(self.pending_question.get("id") or ""))
-            and bool(str(self.pending_question.get("tool_call_id") or ""))
-        )
-        if not pending_valid:
+        pending = self.pending_question
+        if (
+            isinstance(pending, dict)
+            and str(pending.get("id") or "")
+            and str(pending.get("tool_call_id") or "")
+        ):
+            # The renderer iterates options and prints the question.  A
+            # hand-edited session can carry a string or a number here; the
+            # question card would throw on the first missing form control and
+            # the UI would report the backend as unreachable.
+            options = pending.get("options")
+            if not isinstance(options, list):
+                options = []
+            pending["options"] = [
+                str(item) for item in options if item is not None and str(item).strip()
+            ][:6]
+            if not isinstance(pending.get("question"), str):
+                pending["question"] = str(pending.get("question") or "")
+        else:
             # A question without an id cannot be answered and would leave the
             # UI with a disabled composer; drop it so the session can continue.
-            if self.pending_question is not None and self.status == "awaiting_input":
+            if pending is not None and self.status == "awaiting_input":
                 self.status = "idle"
             self.pending_question = None
         if self.status == "running":
